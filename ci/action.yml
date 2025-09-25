@@ -5,7 +5,7 @@ branding:
   color: "purple"
 inputs:
   target_env: { required: true, description: "Target environment" }
-  publishable: { required: true, description: "Test cases exits" }
+  skip_ci: { required: true, description: "Test cases exits" }
   folder_name: { required: true, description: "Folder name" }
 
 
@@ -38,7 +38,7 @@ runs:
           
           
       - name: test
-        if: inputs.target_env == 'test' && inputs.publishable == 'true'
+        if: inputs.target_env == 'test' && inputs.skip_ci == 'false'
         shell: powershell
         run: |
           New-Item -Path "${{ runner.temp }}\test.xml" -ItemType File
