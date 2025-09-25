@@ -1,18 +1,21 @@
-name: Pipeline Setup 
+name: Pipeline Setup
 description: Parse and sets values to be used by pipeline
 branding:
   icon: "activity"
   color: "purple"
 inputs:
       target_env:
-        required: true
-        description: ""
-      source_ref:
-        required: true
+        required: false
+        default: ""
         description: ""
       vars:
-        required: true
+        required: false
         description: ""
+        default: ""
+      everything:
+        required: false
+        description: "Full setup details"
+        default: 'false'
 
 outputs:
       pid:
@@ -59,18 +62,11 @@ runs:
   steps:
 
 
-      - name: Commit author email
+      - name: Get Email
         id: author
-        shell: bash
-        run: |
-          set -euo pipefail
-          EMAIL="$(git log -n 10 --pretty='%ae' \
-          | grep -viE '(^action@github\.com$)|(\[bot\]@users\.noreply\.github\.com$)|(@users\.noreply\.github\.com$)' \
-          | head -n1)"
-          echo "EMAIL=$EMAIL" >> "$GITHUB_OUTPUT"
-          echo "Email: $EMAIL"
-          
-          
+        uses: dhillon-shawn/Local-CICD-UTILS/get-email@v0
+
+
 
       - name: Project Id
         id: pid
@@ -108,6 +104,7 @@ runs:
           fi
 
       - name: PR context + migration gate
+        if: inputs.everything == 'true'
         id: pr
         shell: bash
         run: |
@@ -158,6 +155,7 @@ runs:
 
 
       - name: create deployment matrix
+        if: inputs.everything != 'false'
         shell: bash
         id: deployment_matrix
         run: |
@@ -170,6 +168,7 @@ runs:
           echo "DEPLOYMENT_MATRIX={\"env\":$envs}" >> "$GITHUB_OUTPUT"
 
       - name: Collect
+        if: inputs.everything != 'false'
         id: collect
         uses: actions/github-script@v7
         with:
@@ -233,6 +232,7 @@ runs:
 
       - name: Format release text
         id: format
+        if: inputs.everything != 'false'
         uses: actions/github-script@v7
         env:
             NOTES: ${{ steps.collect.outputs.notes }}
