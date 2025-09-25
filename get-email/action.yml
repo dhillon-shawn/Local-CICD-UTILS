@@ -1,0 +1,77 @@
+name: Get users email
+description: get a non-noreply email for push/PR/issues
+outputs:
+  email:
+    description: email
+    value: ${{ steps.email.outputs.email }}
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      id: email
+      env:
+        GH_TOKEN:  ${{ github.token }}
+        REPO:      ${{ github.repository }}
+        PR_NUM:    ${{ github.event.pull_request.number }}
+        ISSUE_NUM: ${{ github.event.issue.number }}
+        SHA:       ${{ github.sha }}
+        EVENT:     ${{ github.event_name }}
+      run: |
+        set -euo pipefail
+        EMAIL=""
+
+        FILTER='
+          map(select(. != null))
+          | map(ascii_downcase)
+          | map(select(endswith("@users.noreply.github.com")|not))
+          | map(select(contains("[bot]@")|not))
+          | map(select(. != "action@github.com"))
+          | unique
+          | .[0] // empty
+        '
+
+        if [[ "$EVENT" == "push" ]]; then
+          EMAIL="$(
+            git log -n 10 --pretty='%ae' 2>/dev/null \
+            | tr '[:upper:]' '[:lower:]' \
+            | grep -viE '(^action@github\.com$)|(\[bot\]@)|(@users\.noreply\.github\.com$)' \
+            | head -n1 || true
+          )"
+        elif [[ -n "${PR_NUM:-}" ]]; then
+          EMAIL="$(gh api "repos/$REPO/pulls/$PR_NUM/commits" --paginate \
+            --jq "[ .[] | .commit.author.email, .commit.committer.email ] | $FILTER" || true)"
+          if [[ -z "$EMAIL" ]]; then
+            mapfile -t ALS < <(gh api "repos/$REPO/pulls/$PR_NUM" --jq '.assignees[].login' || true)
+            for u in "${ALS[@]:-}"; do
+              [[ "$u" =~ \[bot\]$ ]] && continue
+              E="$(gh api "users/$u" --jq '.email // empty' || true)"
+              if [[ -n "$E" && "$E" == *"@"* && "$E" != "action@github.com" && "$E" != *"@users.noreply.github.com" && "$E" != *"[bot]@"* ]]; then
+                EMAIL="${E,,}"; break
+              fi
+            done
+          fi
+        elif [[ -n "${ISSUE_NUM:-}" ]]; then
+          mapfile -t ALS < <(gh api "repos/$REPO/issues/$ISSUE_NUM" --jq '.assignees[].login' || true)
+          for u in "${ALS[@]:-}"; do
+            [[ "$u" =~ \[bot\]$ ]] && continue
+            E="$(gh api "users/$u" --jq '.email // empty' || true)"
+            if [[ -n "$E" && "$E" == *"@"* && "$E" != "action@github.com" && "$E" != *"@users.noreply.github.com" && "$E" != *"[bot]@"* ]]; then
+              EMAIL="${E,,}"; break
+            fi
+          done
+          if [[ -z "$EMAIL" ]]; then
+            OL="$(gh api "repos/$REPO/issues/$ISSUE_NUM" --jq '.user.login')"
+            if [[ ! "$OL" =~ \[bot\]$ ]]; then
+              E="$(gh api "users/$OL" --jq '.email // empty' || true)"
+              [[ -n "$E" && "$E" == *"@"* && "$E" != "action@github.com" && "$E" != *"@users.noreply.github.com" && "$E" != *"[bot]@"* ]] && EMAIL="${E,,}"
+            fi
+          fi
+        fi
+
+        if [[ -z "$EMAIL" ]]; then
+          echo "::error::No email found."
+          exit 1
+        fi
+
+        echo "email=$EMAIL" >> "$GITHUB_OUTPUT"
+        echo "Resolved email: $EMAIL"
