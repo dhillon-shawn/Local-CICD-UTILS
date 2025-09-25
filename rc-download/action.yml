@@ -10,10 +10,10 @@ inputs:
 outputs:
       version:
         description: ""
-        value:        ${{ steps.pid.outputs.PID }}
+        value:        ${{ steps.pid.outputs.version }}
       package:
         description: ""
-        value:    ${{ steps.ptype.outputs.ptype }}
+        value:    ${{ steps.ptype.outputs.package }}
 
 
 runs:
