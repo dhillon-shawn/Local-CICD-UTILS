@@ -33,9 +33,9 @@ outputs:
         description: ""
         value:        ${{ steps.author.outputs.EMAIL }}
 
-      publishable:
+      skip_ci:
         description: ""
-        value:        ${{ steps.tests.outputs.PUBLISHABLE }}
+        value:        ${{ steps.tests.outputs.skip_ci }}
 
       pr_number:
         description: ""
@@ -74,23 +74,45 @@ runs:
           echo "Process ID: $PID"
 
 
-      - name: Publishable test cases?
-        id: tests
+      - name: Check publishable tests & decide skip_ci
+        id: test
         shell: bash
         run: |
-          if jq -e '.designOptions.fileInfoCollection' project.json >/dev/null 2>&1; then
-            valid_tests="$(jq '[.designOptions.fileInfoCollection[] | select(.editingStatus=="Publishable")] | length' project.json)"
-          else
-            valid_tests="0"
-          fi
-          if [ "$valid_tests" -gt 0 ]; then
-            echo "PUBLISHABLE=true"  >> "$GITHUB_OUTPUT"
-            echo "Publishable Test Cases Detected ✅"
-          else
-            echo "PUBLISHABLE=false" >> "$GITHUB_OUTPUT"
-            echo "No Publishable Test Cases Detected ❌"
-          fi
-          
+            set -euo pipefail
+
+            if jq -e '.designOptions.fileInfoCollection' project.json >/dev/null 2>&1; then
+              valid_tests="$(jq '[.designOptions.fileInfoCollection[] | select(.editingStatus=="Publishable")] | length' project.json)"
+            else
+              valid_tests="0"
+            fi
+
+            if [ "$valid_tests" -gt 0 ]; then
+              echo "Publishable Test Cases Detected"
+              publishable=true
+            else
+              echo "No Publishable Test Cases Detected"
+              publishable=false
+            fi
+
+            msg="$(git log -1 --pretty=%B || true)"
+            echo "Last commit message:"
+            echo "$msg"
+
+            if printf '%s' "$msg" | grep -qiP '\[\s*skip\s*ci\s*\]'; then
+              has_skip_tag=true
+              echo "Detected [skip ci] tag  CI should be skipped."
+            else
+              has_skip_tag=false
+              echo "No [skip ci] tag  CI may proceed if publishable."
+            fi
+
+            if $publishable && [ "$has_skip_tag" = false ]; then
+              echo "skip_ci=false"  >> "$GITHUB_OUTPUT"
+              echo "Result: skip_ci is false"
+            else
+              echo "skip_ci=true" >> "$GITHUB_OUTPUT"
+              echo "Result: skip_ci is true "
+            fi
           
       - name: Parse project output type from designOptions
         shell: bash
