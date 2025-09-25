@@ -7,14 +7,7 @@ inputs:
     target_env:         {  required: true, description: "" }
     pid:                {  required: true, description: "" }
 
-    dev_rid:            {  required: true, description: "" }
-    bot_rid:            {  required: false, description: "" }
-    dev_uid:           {  required: true, description: "" }
-
-    bot_uid:           {  required: false, description: "" }
-    mid:               {  required: false, description: "" }
-
-    FOLDER_NAME: {  required: true, description: "" }
+    vars:  {  required: true, description: "" }
 
 outputs:
   fid:
@@ -28,6 +21,17 @@ runs:
   using: composite
   steps:
 
+    - name: set vars
+      shell: bash
+      run: |
+        {
+          echo "dev_rid=${{ fromJSON(inputs.vars).DEV_RID }}"
+          echo "bot_rid=${{ fromJSON(inputs.vars).BOT_RID }}"
+          echo "mid=${{ fromJSON(inputs.vars).MID }}"
+          echo "bot_uid=${{ fromJSON(inputs.vars).BOT_UID }}"
+          echo "dev_uid=${{ fromJSON(inputs.vars).DEV_UID }}"
+          echo "folder=${{ fromJSON(inputs.vars).FOLDER_NAME }}"
+        } >> "$GITHUB_ENV"
 
     - id: ensure
       shell: bash
@@ -43,7 +47,7 @@ runs:
         # GreatGrandma/Grandma                -> Grandma
         # --------------------------------------------------------------------------------
         
-        FULLY_QUALIFIED="${{ inputs.FOLDER_NAME }}"
+        FULLY_QUALIFIED="${{ env.folder }}"
 
         trimmed="${FULLY_QUALIFIED%/}"
         folder="${trimmed##*/}"
@@ -159,10 +163,10 @@ runs:
               --header "X-UIPATH-OrganizationUnitId: $FOUND_ID" \
               --data "{
                       \"assignments\": {
-                        \"UserIds\": [ ${{ inputs.dev_uid}} ],
+                        \"UserIds\": [ ${{ env.dev_uid}} ],
                         \"RolesPerFolder\": [
                           { \"FolderId\": $FOUND_ID,
-                            \"RoleIds\": [ ${{ inputs.dev_rid }} ] }
+                            \"RoleIds\": [ ${{ env.dev_rid }} ] }
                         ]
                       }
                     }" \
@@ -171,17 +175,17 @@ runs:
           echo "Response: $res"
           echo "Assigned User/User Role to Created Folder"
 
-          if [ "${{ inputs.target_env }}" != "prod" ]; then
+          if [ "${{ env.target_env }}" != "prod" ]; then
             re=$(curl  --location --request POST \
                 --header "Authorization: Bearer ${{ env.TOKEN }}}}" \
                 --header "Content-Type: application/json" \
                 --header "X-UIPATH-OrganizationUnitId: $FOUND_ID" \
                 --data "{
                         \"assignments\": {
-                          \"UserIds\": [ ${{ inputs.bot_uid}} ],
+                          \"UserIds\": [ ${{ env.bot_uid}} ],
                           \"RolesPerFolder\": [
                             { \"FolderId\": $FOUND_ID,
-                              \"RoleIds\": [ ${{ inputs.bot_rid }} ] }
+                              \"RoleIds\": [ ${{ env.bot_rid }} ] }
                           ]
                         }
                       }" \
@@ -197,7 +201,7 @@ runs:
                 --data "{
                           \"assignments\": {
                             \"FolderIds\": [ $FOUND_ID ],
-                            \"MachineIds\": [ ${{ inputs.mid }} ]
+                            \"MachineIds\": [ ${{ env.mid }} ]
                           }
                         }" \
                 "${{ env.OR_URL }} }}/odata/Folders/UiPath.Server.Configuration.OData.AssignMachines"

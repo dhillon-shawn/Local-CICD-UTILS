@@ -1,0 +1,80 @@
+name: RC Upload
+description: Upload RC
+branding:
+  icon: "activity"
+  color: "purple"
+inputs:
+    RC_TAG:
+        required: true
+        description: ""
+    PID:
+        required: true
+        description: ""
+    SHA:
+        required: true
+        description: ""
+    VERSION:
+        required: true
+        description: ""
+    PR_NUM:
+        required: true
+        description: ""
+    FOLDER:
+        required: true
+        description: ""
+
+runs:
+  using: composite
+  steps:
+
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+            name: output
+            path: ./output
+
+
+      - name: Create RC + upload package/meta data
+        if: ${{ inputs.rc_tag != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO:     ${{ github.repository }}
+          PID:      ${{ inputs.PID }}
+          VERSION:  ${{ inputs.VERSION }}
+          SHA:      ${{ inputs.SHA }}
+          RC_TAG:   ${{ inputs.RC_TAG }}
+          PR_NUM:   ${{ inputs.PR_NUM }}
+          FOLDER: "${{ inputs.FOLDER }}"
+          OUT_DIR:  output
+        run: |
+          set -euo pipefail
+          PKG="$(find "$OUT_DIR" -type f -name '*.nupkg' | sort | head -n 1 || true)"
+          test -n "${PKG:-}" || { echo "No .nupkg under ./$OUT_DIR"; exit 1; }
+          NAME="$(basename "$PKG")"
+
+          cat > rc-meta.json <<EOF
+          {"folder":"${FOLDER}","pid":"${PID}","version":"${VERSION}","package":"${NAME}","commit":"${SHA}"}
+          EOF
+
+          if gh release view "$RC_TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release edit "$RC_TAG" \
+              --repo   "$REPO" \
+              --title  "RC $RC_TAG" \
+              --notes  "PR #$PR_NUM - pid=$PID - version=$VERSION - commit=$SHA" \
+              --target "$SHA" \
+              --prerelease
+          else
+            gh release create "$RC_TAG" \
+              --repo   "$REPO" \
+              --title  "RC $RC_TAG" \
+              --notes  "PR #$PR_NUM - pid=$PID - version=$VERSION - commit=$SHA" \
+              --target "$SHA" \
+              --prerelease
+          fi
+
+          gh release upload "$RC_TAG" --repo "$REPO" "$PKG" --clobber
+          gh release upload "$RC_TAG" --repo "$REPO" rc-meta.json --clobber
+
+          echo "RC $RC_TAG updated with $NAME and rc-meta.json"

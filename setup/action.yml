@@ -8,10 +8,6 @@ inputs:
         required: false
         default: ""
         description: ""
-      vars:
-        required: false
-        description: ""
-        default: ""
       everything:
         required: false
         description: "Full setup details"
@@ -77,14 +73,6 @@ runs:
           echo "PID=$PID" >> "$GITHUB_OUTPUT"
           echo "Process ID: $PID"
 
-      - name: Parse project output type from designOptions
-        shell: bash
-        id: ptype
-        run: |
-          ptype=$(jq -r '.designOptions.outputType' project.json)
-          echo "ptype=$ptype" >> $GITHUB_OUTPUT
-          echo "Output type: $ptype"
-
 
       - name: Publishable test cases?
         id: tests
@@ -102,32 +90,21 @@ runs:
             echo "PUBLISHABLE=false" >> "$GITHUB_OUTPUT"
             echo "No Publishable Test Cases Detected ❌"
           fi
-
-      - name: PR context + migration gate
-        if: inputs.everything == 'true'
-        id: pr
+          
+          
+      - name: Parse project output type from designOptions
         shell: bash
+        if: inputs.everything != 'false'
+        id: ptype
         run: |
-          PR_NUM="${{ github.event.pull_request.number || '' }}"
-          PR_ACT="${{ github.event.action || '' }}"
-          echo "PR_NUMBER=$PR_NUM" >> "$GITHUB_OUTPUT"
-          echo "PR_ACTION=$PR_ACT" >> "$GITHUB_OUTPUT"
+          ptype=$(jq -r '.designOptions.outputType' project.json)
+          echo "ptype=$ptype" >> $GITHUB_OUTPUT
+          echo "Output type: $ptype"
 
-          # Migrate Test: on PR opened (first promote Dev -> Test)
-          # Migrate Prod: on push (after approved)
-          MIGRATE="false"
-          if [ "${{ inputs.target_env }}" = "test" ] && [ "${{ github.event_name }}" = "pull_request" ] && [ "$PR_ACT" = "opened" ]; then
-            MIGRATE="true"
-          elif [ "${{ inputs.target_env }}" = "hotfix" ] ]; then
-            MIGRATE="true"
-          fi
-          echo "MIGRATE=$MIGRATE" >> "$GITHUB_OUTPUT"
-          echo "Promotion: $MIGRATE"
-          echo "PR#: $PR_NUM"
-          echo "PR ACTION: $PR_ACT"
 
       - name: Parse non-UiPath libs
         shell: bash
+        if: inputs.everything != 'false'
         id: deps
         run: |
               jq -r '
@@ -143,6 +120,7 @@ runs:
 
 
       - name: Parse Entry Point
+        if: inputs.everything != 'false'
         id: entry
         shell: bash
         run: |

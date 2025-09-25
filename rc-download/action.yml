@@ -1,0 +1,73 @@
+name: RC download
+description: Parse and download rc
+branding:
+  icon: "activity"
+  color: "purple"
+inputs:
+    rc_tag:
+        required: true
+        description: ""
+outputs:
+      version:
+        description: ""
+        value:        ${{ steps.pid.outputs.PID }}
+      package:
+        description: ""
+        value:    ${{ steps.ptype.outputs.ptype }}
+
+
+runs:
+  using: composite
+  steps:
+
+      - name: Download rc-meta.json for this tag
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p rc
+          gh release download "${{ inputs.rc_tag }}" --repo "$REPO" --dir rc --pattern "rc-meta.json"
+          test -f rc/rc-meta.json || { echo "rc-meta.json missing on ${{ inputs.rc_tag }}"; exit 1; }
+          cat rc/rc-meta.json
+          
+      - name: Read pid/version/package from meta
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          PID=$(jq -r '.pid' rc/rc-meta.json)
+          VERSION=$(jq -r '.version' rc/rc-meta.json)
+          PACKAGE=$(jq -r '.package' rc/rc-meta.json)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "package=$PACKAGE" >> "$GITHUB_OUTPUT"
+          
+      - name: Download the exact package from this RC
+        shell: bash
+        env:
+            GH_TOKEN: ${{ github.token }}
+            REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p rc
+          echo "Downloading ${{ steps.meta.outputs.package }} from tag ${{ inputs.rc_tag }}"
+          gh release download "${{ inputs.rc_tag }}" \
+            --repo "$REPO" \
+            --dir rc \
+            --pattern "${{ steps.meta.outputs.package }}"
+          ls -lah rc
+
+      - name: Copy into into ./output
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          cp "rc/${{ steps.meta.outputs.package }}" "output/${{ steps.meta.outputs.package }}"
+          ls -lah output
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: output
+          path: ./output
