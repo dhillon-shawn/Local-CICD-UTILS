@@ -71,8 +71,8 @@ runs:
         FOUND_NAME=""
         if [ -n "$FULLY_QUALIFIED" ]; then
             echo "Searching by name: $FULLY_QUALIFIED"
-            response=$(curl  -H "Authorization: Bearer ${{ env.TOKEN }}}}" \
-              "${{ env.OR_URL }} }}/odata/Folders?\$filter=FullyQualifiedName%20eq%20'$FULLY_QUALIFIED'&\$select=Id,FullyQualifiedName")
+            response=$(curl  -H "Authorization: Bearer ${{ env.TOKEN }}" \
+              "${{ env.OR_URL }}/odata/Folders?\$filter=FullyQualifiedName%20eq%20'$FULLY_QUALIFIED'&\$select=Id,FullyQualifiedName")
             echo "Response: $response"
             
             FOUND_ID=$(echo "$response" | jq -r '.value[0].Id // empty')
@@ -103,16 +103,16 @@ runs:
           if [ -n "$PARENT_NAME" ]; then
             echo "Getting parent folder id"
             parent_response=$(curl  --location  \
-              --header "Authorization: Bearer ${{ env.TOKEN }}}}" \
+              --header "Authorization: Bearer ${{ env.TOKEN }}" \
               --header "Content-Type: application/json" \
-              "${{ env.OR_URL }} }}/odata/Folders?\$select=Id&\$filter=DisplayName%20eq%20'$PARENT_NAME'"
+              "${{ env.OR_URL }}/odata/Folders?\$select=Id&\$filter=DisplayName%20eq%20'$PARENT_NAME'"
             )
             echo "Response: $parent_response"
             PARENT_ID=$(echo "$parent_response" | jq -r '.Id // .value[0].Id // empty')
 
             echo "Creating Sub Folder"
             response=$(curl  --location --request POST \
-              --header "Authorization: Bearer ${{ env.TOKEN }}}}" \
+              --header "Authorization: Bearer ${{ env.TOKEN }}" \
               --header "Content-Type: application/json" \
               --data "{
                   \"DisplayName\": \"$folder\",
@@ -123,13 +123,13 @@ runs:
                   \"FeedType\": \"Processes\",
                   \"ParentId\": $PARENT_ID
               }" \
-              "${{ env.OR_URL }} }}/odata/Folders"
+              "${{ env.OR_URL }}/odata/Folders"
             )
             echo "Response: $response"
           else
             echo "Creating Folder (Not a SubFolder)"
             response=$(curl --fail --location --request POST \
-              --header "Authorization: Bearer ${{ env.TOKEN }}}}" \
+              --header "Authorization: Bearer ${{ env.TOKEN }}" \
               --header "Content-Type: application/json" \
               --data "{
                   \"DisplayName\": \"$FULLY_QUALIFIED\",
@@ -139,7 +139,7 @@ runs:
                   \"PermissionModel\": \"FineGrained\",
                   \"FeedType\": \"Processes\"
               }" \
-              "${{ env.OR_URL }} }}/odata/Folders"
+              "${{ env.OR_URL }}/odata/Folders"
             )
             echo "Response: $response"
           fi
@@ -158,7 +158,7 @@ runs:
 
 
           res=$(curl  --location --request POST \
-              --header "Authorization: Bearer ${{ env.TOKEN }}}}" \
+              --header "Authorization: Bearer ${{ env.TOKEN }}" \
               --header "Content-Type: application/json" \
               --header "X-UIPATH-OrganizationUnitId: $FOUND_ID" \
               --data "{
@@ -170,14 +170,14 @@ runs:
                         ]
                       }
                     }" \
-              "${{ env.OR_URL }} }}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers"
+              "${{ env.OR_URL }}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers"
           )
           echo "Response: $res"
           echo "Assigned User/User Role to Created Folder"
 
           if [ "${{ env.target_env }}" != "prod" ]; then
             re=$(curl  --location --request POST \
-                --header "Authorization: Bearer ${{ env.TOKEN }}}}" \
+                --header "Authorization: Bearer ${{ env.TOKEN }}" \
                 --header "Content-Type: application/json" \
                 --header "X-UIPATH-OrganizationUnitId: $FOUND_ID" \
                 --data "{
@@ -189,13 +189,13 @@ runs:
                           ]
                         }
                       }" \
-                "${{ env.OR_URL }} }}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers"
+                "${{ env.OR_URL }}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers"
             )
             echo "Response: $re"
             echo "Assigned Bot/Bot Role to Created Folder"
 
             r=$(curl  --location --request POST \
-                --header "Authorization: Bearer ${{ env.TOKEN }}}}" \
+                --header "Authorization: Bearer ${{ env.TOKEN }}" \
                 --header "Content-Type: application/json" \
                 --header "X-UIPATH-OrganizationUnitId: $FOUND_ID" \
                 --data "{
@@ -204,7 +204,7 @@ runs:
                             \"MachineIds\": [ ${{ env.mid }} ]
                           }
                         }" \
-                "${{ env.OR_URL }} }}/odata/Folders/UiPath.Server.Configuration.OData.AssignMachines"
+                "${{ env.OR_URL }}/odata/Folders/UiPath.Server.Configuration.OData.AssignMachines"
             )
             echo "Response: $r"
             echo "Assigned Machine to Created Folder"
