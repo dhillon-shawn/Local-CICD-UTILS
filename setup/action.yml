@@ -98,12 +98,12 @@ runs:
             echo "Last commit message:"
             echo "$msg"
 
-            if printf '%s' "$msg" | grep -qiP '\[\s*skip\s*ci\s*\]'; then
+            if printf '%s' "$msg" | grep -qiE '\[[[:space:]]*skip([[:space:]]*tests?)?[[:space:]]*\]'; then
               has_skip_tag=true
-              echo "Detected [skip ci] tag  CI should be skipped."
+              echo "Detected [skip]/[skip test]/[skip tests] tag  CI should be skipped."
             else
               has_skip_tag=false
-              echo "No [skip ci] tag  CI may proceed if publishable."
+              echo "No [skip]/[skip test]/[skip tests] tag  CI will run if publishable."
             fi
 
             if $publishable && [ "$has_skip_tag" = false ]; then
@@ -113,7 +113,7 @@ runs:
               echo "skip_ci=true" >> "$GITHUB_OUTPUT"
               echo "Result: skip_ci is true "
             fi
-          
+
       - name: Parse project output type from designOptions
         shell: bash
         if: inputs.everything != 'false'
