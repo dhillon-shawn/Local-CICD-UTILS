@@ -20,9 +20,6 @@ inputs:
     required: false
     default: ""
 
-  publishable:
-    description: "Test cases detected."
-    required: true
   cd_status:
     description: "Deployment job result"
     required: false
@@ -245,21 +242,21 @@ runs:
 
 
     - name: Write junit2 requirements file
-      if: ${{ inputs.target_env == 'test' && inputs.publishable == 'true' && hashFiles(inputs.xml_path) != ''}}
+      if: ${{ inputs.target_env == 'test'  && hashFiles(inputs.xml_path) != ''}}
       shell: python
       run: |
           open("junit2-requirements.txt","w",encoding="utf-8").write("junit2html\npremailer\n")
 
 
     - uses: actions/setup-python@v5
-      if: ${{ inputs.target_env == 'test' && inputs.publishable == 'true' && hashFiles(inputs.xml_path) != ''}}
+      if: ${{ inputs.target_env == 'test' && hashFiles(inputs.xml_path) != ''}}
       with:
         python-version: "3.x"
         cache: "pip"
         cache-dependency-path: "junit2-requirements.txt"
 
     - name: JUnit XML → inline HTML (test.html)
-      if: ${{ inputs.target_env == 'test' && inputs.publishable == 'true' && hashFiles(inputs.xml_path) != ''}}
+      if: ${{ inputs.target_env == 'test' && hashFiles(inputs.xml_path) != ''}}
       shell: python
       run: |
         import sys, runpy, importlib.util
