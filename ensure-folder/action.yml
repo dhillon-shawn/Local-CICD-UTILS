@@ -1,0 +1,214 @@
+name: Resolve Folder
+description: folder resolution/creation
+branding:
+  icon: "package"
+  color: "purple"
+inputs:
+    target_env:         {  required: true, description: "" }
+    pid:                {  required: true, description: "" }
+    or_url:             {  required: true, description: "" }
+    token:              {  required: true, description: "" }
+
+    dev_rid:            {  required: true, description: "" }
+    bot_rid:            {  required: false, description: "" }
+    dev_uid:           {  required: true, description: "" }
+
+    bot_uid:           {  required: false, description: "" }
+    mid:               {  required: false, description: "" }
+
+    FOLDER_NAME: {  required: true, description: "" }
+
+outputs:
+  fid:
+    value: ${{ steps.ensure.outputs.FID }}
+    description: ""
+  base_folder_name:
+    value: ${{ steps.ensure.outputs.folder }}
+    description: ""
+
+runs:
+  using: composite
+  steps:
+
+
+    - id: ensure
+      shell: bash
+      run: |
+        # --------------------------------------------------------------------------------
+        # Example: GreatGrandma/Grandma/Mom/Daughter
+        # PARENT_FQN == everything before our target subfolder == GreatGrandma/Grandma
+        # PARENT_NAME == The direct parent of our target subfolder == Mom
+        # CHILD_NAME == our target subfolder == Daughter
+
+        # orphan                              -> orphan
+        # GreatGrandma/Grandma/Mom/Daughter   -> Daughter
+        # GreatGrandma/Grandma                -> Grandma
+        # --------------------------------------------------------------------------------
+        
+        FULLY_QUALIFIED="${{ inputs.FOLDER_NAME }}"
+
+        trimmed="${FULLY_QUALIFIED%/}"
+        folder="${trimmed##*/}"
+
+        echo "FULLY_QUALIFIED='${FULLY_QUALIFIED}' -> folder='${folder}'"
+
+        if [[ "${trimmed}" == *"/"* ]]; then
+          PARENT_FQN="${trimmed%/*}"   
+          PARENT_NAME="${PARENT_FQN##*/}" 
+        else
+          PARENT_FQN=""
+          PARENT_NAME=""
+        fi
+
+        echo "parent_fqn='${PARENT_FQN}' parent_name='${PARENT_NAME}'"
+
+        echo "folder=${folder}" >> "$GITHUB_OUTPUT"
+        
+        
+        FOUND_ID=""
+        FOUND_NAME=""
+        if [ -n "$FULLY_QUALIFIED" ]; then
+            echo "Searching by name: $FULLY_QUALIFIED"
+            response=$(curl  -H "Authorization: Bearer ${{inputs.token}}" \
+              "${{ inputs.or_url }}/odata/Folders?\$filter=FullyQualifiedName%20eq%20'$FULLY_QUALIFIED'&\$select=Id,FullyQualifiedName")
+            echo "Response: $response"
+            
+            FOUND_ID=$(echo "$response" | jq -r '.value[0].Id // empty')
+            FOUND_NAME=$(echo "$response" | jq -r '.value[0].FullyQualifiedName // empty')
+            if [ -n "$FOUND_ID" ] && [ -n "$FOUND_NAME" ]; then
+              echo "Folder Found: $FOUND_NAME ($FOUND_ID)"
+              echo "FID=$FOUND_ID" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Did not find folder by FullyQualifiedName"
+        fi
+
+
+        # ===============================================================================================
+        # Create
+        # must check if fully qualified name includes sub folders
+        # we are only creating the last subfolder and using the second to last folder as the parent id
+        # ex: FullyQualifiedName: Grandma/Mom/Daughter -> we create daughter folder using Mom id
+        # *Note:this process isn't recursive so if Grandma or Mom folder don't exist we fail*
+        # ===============================================================================================
+
+        if [ -z "$FULLY_QUALIFIED" ]; then
+          echo "No FOLDER NAME to Create"
+          exit 1;
+        fi
+
+        if [ -z "$FOUND_ID" ]; then
+          if [ -n "$PARENT_NAME" ]; then
+            echo "Getting parent folder id"
+            parent_response=$(curl  --location  \
+              --header "Authorization: Bearer ${{inputs.token}}" \
+              --header "Content-Type: application/json" \
+              "${{ inputs.or_url }}/odata/Folders?\$select=Id&\$filter=DisplayName%20eq%20'$PARENT_NAME'"
+            )
+            echo "Response: $parent_response"
+            PARENT_ID=$(echo "$parent_response" | jq -r '.Id // .value[0].Id // empty')
+
+            echo "Creating Sub Folder"
+            response=$(curl  --location --request POST \
+              --header "Authorization: Bearer ${{inputs.token}}" \
+              --header "Content-Type: application/json" \
+              --data "{
+                  \"DisplayName\": \"$folder\",
+                  \"Description\": \"Created via API\",
+                  \"FullyQualifiedName\": \"$FULLY_QUALIFIED\",
+                  \"ProvisionType\": \"Automatic\",
+                  \"PermissionModel\": \"FineGrained\",
+                  \"FeedType\": \"Processes\",
+                  \"ParentId\": $PARENT_ID
+              }" \
+              "${{ inputs.or_url }}/odata/Folders"
+            )
+            echo "Response: $response"
+          else
+            echo "Creating Folder (Not a SubFolder)"
+            response=$(curl --fail --location --request POST \
+              --header "Authorization: Bearer ${{inputs.token}}" \
+              --header "Content-Type: application/json" \
+              --data "{
+                  \"DisplayName\": \"$FULLY_QUALIFIED\",
+                  \"Description\": \"Created via API\",
+                  \"FullyQualifiedName\": \"$FULLY_QUALIFIED\",
+                  \"ProvisionType\": \"Automatic\",
+                  \"PermissionModel\": \"FineGrained\",
+                  \"FeedType\": \"Processes\"
+              }" \
+              "${{ inputs.or_url }}/odata/Folders"
+            )
+            echo "Response: $response"
+          fi
+
+          FOUND_ID=$(echo "$response" | jq -r '.Id // .value[0].Id // empty')
+          FOUND_NAME=$(echo "$response" | jq -r '.FullyQualifiedName // .value[0].FullyQualifiedName // empty')
+
+          echo "FID=$FOUND_ID" >> "$GITHUB_OUTPUT"
+
+        # ===============================================================================================
+        # Now That Folder is Created We Allocate
+        # We assign a bot user with robot role
+        # We assign user/directory group with a developer role
+        # We assign a machine with testing license
+        # ===============================================================================================
+
+
+          res=$(curl  --location --request POST \
+              --header "Authorization: Bearer ${{inputs.token}}" \
+              --header "Content-Type: application/json" \
+              --header "X-UIPATH-OrganizationUnitId: $FOUND_ID" \
+              --data "{
+                      \"assignments\": {
+                        \"UserIds\": [ ${{ inputs.dev_uid}} ],
+                        \"RolesPerFolder\": [
+                          { \"FolderId\": $FOUND_ID,
+                            \"RoleIds\": [ ${{ inputs.dev_rid }} ] }
+                        ]
+                      }
+                    }" \
+              "${{ inputs.or_url }}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers"
+          )
+          echo "Response: $res"
+          echo "Assigned User/User Role to Created Folder"
+
+          if [ "${{ inputs.target_env }}" != "prod" ]; then
+            re=$(curl  --location --request POST \
+                --header "Authorization: Bearer ${{inputs.token}}" \
+                --header "Content-Type: application/json" \
+                --header "X-UIPATH-OrganizationUnitId: $FOUND_ID" \
+                --data "{
+                        \"assignments\": {
+                          \"UserIds\": [ ${{ inputs.bot_uid}} ],
+                          \"RolesPerFolder\": [
+                            { \"FolderId\": $FOUND_ID,
+                              \"RoleIds\": [ ${{ inputs.bot_rid }} ] }
+                          ]
+                        }
+                      }" \
+                "${{ inputs.or_url }}/odata/Folders/UiPath.Server.Configuration.OData.AssignUsers"
+            )
+            echo "Response: $re"
+            echo "Assigned Bot/Bot Role to Created Folder"
+
+            r=$(curl  --location --request POST \
+                --header "Authorization: Bearer ${{inputs.token}}" \
+                --header "Content-Type: application/json" \
+                --header "X-UIPATH-OrganizationUnitId: $FOUND_ID" \
+                --data "{
+                          \"assignments\": {
+                            \"FolderIds\": [ $FOUND_ID ],
+                            \"MachineIds\": [ ${{ inputs.mid }} ]
+                          }
+                        }" \
+                "${{ inputs.or_url }}/odata/Folders/UiPath.Server.Configuration.OData.AssignMachines"
+            )
+            echo "Response: $r"
+            echo "Assigned Machine to Created Folder"
+            exit 0
+          fi
+        fi
+        echo "Failed to find or create a folder"
+
+

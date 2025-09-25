@@ -1,0 +1,64 @@
+name: CI
+description: Continuos Integration
+branding:
+  icon: "package"
+  color: "purple"
+inputs:
+  target_env: { required: true, description: "Target environment" }
+  publishable: { required: true, description: "Test cases exits" }
+  folder_name: { required: true, description: "Folder name" }
+
+
+runs:
+  using: composite
+  steps:
+
+      - name: Create Results DIR
+        shell: powershell
+        run: New-Item -Path "./results" -ItemType Directory -Force | Out-Null
+
+      - name: analyze
+        if: inputs.target_env == 'dev'
+        shell: powershell
+        run: |
+          packages\UiPath.CLI.Windows.25.4.9337.28376\tools\uipcli.exe package analyze '${{ github.workspace }}\project.json' `
+            --resultPath '${{ runner.temp }}\analyze.json' `
+            --orchestratorUrl '${{ env.BASE_URL }}/' `
+            --orchestratorTenant '${{ env.TENANT }}' `
+            -A '${{ env.ORG }}' -I '${{env.APP_ID  }}' -S '${{env.APP_SECRET}}' `
+            --orchestratorApplicationScope '${{ env.scope}}' `
+            --analyzerTraceLevel "Warning" `
+            --ignoredRules "ST-NMG-001,ST-NMG-002,ST-NMG-009,ST-NMG-011,ST-NMG-016,ST-NMG-008,ST-USG-032,ST-USG-034,ST-USG-027,UI-ANA-018,TA-DBP-002,ST-MRD-002,TA-DBP-003" `
+            --traceLevel Verbose --disableBuiltInNugetFeeds -y `
+            --identityUrl '${{ env.BASE_URL }}/identity_'
+                  
+          cat ${{ runner.temp }}\analyze.json
+          New-Item -ItemType Directory -Force -Path '.\results' | Out-Null
+          Copy-Item '${{ runner.temp }}\analyze.json' '.\results\analyze.json' -Force
+          
+          
+      - name: test
+        if: inputs.target_env == 'test' && inputs.publishable == 'true'
+        shell: powershell
+        run: |
+          New-Item -Path "${{ runner.temp }}\test.xml" -ItemType File
+          packages\UiPath.CLI.Windows.25.4.9337.28376\tools\uipcli.exe test run `
+            '${{ env.BASE_URL }}/' '${{ env.TENANT }}' `
+            -P '${{ github.workspace }}\project.json' --out "junit" --r '${{ runner.temp }}\test.xml' `
+            -A '${{ env.ORG }}' -I '${{env.APP_ID  }}' -S '${{env.APP_SECRET}}' `
+            --applicationScope '${{ env.scope}}' --attachRobotLogs `
+            -o '${{ inputs.folder_name }}' `
+            --traceLevel Verbose --disableBuiltInNugetFeeds -y `
+            --identityUrl '${{ env.BASE_URL }}/identity_'
+                  
+          cat ${{ runner.temp }}\test.xml
+          New-Item -ItemType Directory -Force -Path '.\results' | Out-Null
+          Copy-Item '${{ runner.temp }}\test.xml' '.\results\test.xml' -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: ${{ always() && !cancelled() }}
+        with:
+          name: results
+          path: ./results/*
+        continue-on-error: true

@@ -1,0 +1,262 @@
+name: Pipeline Setup 
+description: Parse and sets values to be used by pipeline
+branding:
+  icon: "activity"
+  color: "purple"
+inputs:
+      target_env:
+        required: true
+        description: ""
+      source_ref:
+        required: true
+        description: ""
+      vars:
+        required: true
+        description: ""
+
+outputs:
+      pid:
+        description: ""
+        value:        ${{ steps.pid.outputs.PID }}
+      ptype:
+        description: ""
+        value:    ${{ steps.ptype.outputs.ptype }}
+
+      entry_point:
+        description: ""
+        value:    ${{ steps.entry.outputs.ENTRY_POINT }}
+
+      deployment_matrix:
+        description: ""
+        value:    ${{ steps.deployment_matrix.outputs.DEPLOYMENT_MATRIX }}
+
+      email:
+        description: ""
+        value:        ${{ steps.author.outputs.EMAIL }}
+
+      publishable:
+        description: ""
+        value:        ${{ steps.tests.outputs.PUBLISHABLE }}
+
+      pr_number:
+        description: ""
+        value:           ${{ steps.pr.outputs.PR_NUMBER }}
+      pr_action:
+        description: ""
+        value:            ${{ steps.pr.outputs.PR_ACTION }}
+      migrate:
+        description: ""
+        value:             ${{ steps.pr.outputs.MIGRATE }}
+
+      notes:
+        description: ""
+        value:             ${{ steps.format.outputs.release_text }}
+
+
+
+runs:
+  using: composite
+  steps:
+
+
+      - name: Commit author email
+        id: author
+        shell: bash
+        run: |
+          set -euo pipefail
+          EMAIL="$(git log -n 10 --pretty='%ae' \
+          | grep -viE '(^action@github\.com$)|(\[bot\]@users\.noreply\.github\.com$)|(@users\.noreply\.github\.com$)' \
+          | head -n1)"
+          echo "EMAIL=$EMAIL" >> "$GITHUB_OUTPUT"
+          echo "Email: $EMAIL"
+          
+          
+
+      - name: Project Id
+        id: pid
+        shell: bash
+        run: |
+          set -euo pipefail
+          PID=$(jq -r '.name' ./project.json)
+          echo "PID=$PID" >> "$GITHUB_OUTPUT"
+          echo "Process ID: $PID"
+
+      - name: Parse project output type from designOptions
+        shell: bash
+        id: ptype
+        run: |
+          ptype=$(jq -r '.designOptions.outputType' project.json)
+          echo "ptype=$ptype" >> $GITHUB_OUTPUT
+          echo "Output type: $ptype"
+
+
+      - name: Publishable test cases?
+        id: tests
+        shell: bash
+        run: |
+          if jq -e '.designOptions.fileInfoCollection' project.json >/dev/null 2>&1; then
+            valid_tests="$(jq '[.designOptions.fileInfoCollection[] | select(.editingStatus=="Publishable")] | length' project.json)"
+          else
+            valid_tests="0"
+          fi
+          if [ "$valid_tests" -gt 0 ]; then
+            echo "PUBLISHABLE=true"  >> "$GITHUB_OUTPUT"
+            echo "Publishable Test Cases Detected ✅"
+          else
+            echo "PUBLISHABLE=false" >> "$GITHUB_OUTPUT"
+            echo "No Publishable Test Cases Detected ❌"
+          fi
+
+      - name: PR context + migration gate
+        id: pr
+        shell: bash
+        run: |
+          PR_NUM="${{ github.event.pull_request.number || '' }}"
+          PR_ACT="${{ github.event.action || '' }}"
+          echo "PR_NUMBER=$PR_NUM" >> "$GITHUB_OUTPUT"
+          echo "PR_ACTION=$PR_ACT" >> "$GITHUB_OUTPUT"
+
+          # Migrate Test: on PR opened (first promote Dev -> Test)
+          # Migrate Prod: on push (after approved)
+          MIGRATE="false"
+          if [ "${{ inputs.target_env }}" = "test" ] && [ "${{ github.event_name }}" = "pull_request" ] && [ "$PR_ACT" = "opened" ]; then
+            MIGRATE="true"
+          elif [ "${{ inputs.target_env }}" = "hotfix" ] ]; then
+            MIGRATE="true"
+          fi
+          echo "MIGRATE=$MIGRATE" >> "$GITHUB_OUTPUT"
+          echo "Promotion: $MIGRATE"
+          echo "PR#: $PR_NUM"
+          echo "PR ACTION: $PR_ACT"
+
+      - name: Parse non-UiPath libs
+        shell: bash
+        id: deps
+        run: |
+              jq -r '
+                .dependencies
+                | to_entries
+                | map(select(.key | startswith("UiPath.") | not))
+                | map("\(.key):\(.value | capture("(?<ver>[0-9]+(\\.[0-9]+)+)").ver)")
+                | .[]
+              ' project.json > libs.txt
+
+              echo "Dependencies found:"
+              cat libs.txt
+
+
+      - name: Parse Entry Point
+        id: entry
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f "./project.json" ]]; then
+            EP=$(jq -er '.entryPoints[0].filePath' ./project.json)
+            echo "ENTRY_POINT=$EP" >> "$GITHUB_OUTPUT"
+            echo "Entry Point: $EP"
+          fi
+
+
+      - name: create deployment matrix
+        shell: bash
+        id: deployment_matrix
+        run: |
+          case "${{ inputs.target_env }}" in
+            dev)     envs='["dev"]' ;;
+            test)    envs='["dev","test"]' ;;
+            hotfix) envs='["dev","test","prod"]' ;;
+            *) echo "Unknown target_env: ${{ inputs.target_env }}" >&2; exit 1 ;;
+          esac
+          echo "DEPLOYMENT_MATRIX={\"env\":$envs}" >> "$GITHUB_OUTPUT"
+
+      - name: Collect
+        id: collect
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repo = context.repo;
+            const serverUrl = process.env.GITHUB_SERVER_URL;
+            const actor = context.actor;
+            const topN = (arr, n = 50) => (arr || []).slice(0, n);
+
+            if (context.eventName === 'push') {
+              const head = context.sha;
+              const base = context.payload.before;
+
+              const commit = await github.rest.repos.getCommit({ ...repo, ref: head });
+              const message = commit.data.commit.message;
+
+              let diff_url, files = [], files_count = 0;
+              if (base && !/^0+$/.test(base)) {
+                const cmp = await github.rest.repos.compareCommits({ ...repo, base, head });
+                diff_url = cmp.data.html_url;
+                files = (cmp.data.files || []).map(f => f.filename);
+                files_count = cmp.data.files?.length || 0;
+              } else {
+                diff_url = `${serverUrl}/${repo.owner}/${repo.repo}/commit/${head}`;
+                files = (commit.data.files || []).map(f => f.filename);
+                files_count = commit.data.files?.length || 0;
+              }
+
+              core.setOutput('notes', JSON.stringify({
+                actor, message, diff_url, files: topN(files), files_count
+              }));
+
+            } else if (context.eventName === 'pull_request') {
+              const pr = context.payload.pull_request;
+              const prNumber = pr.number;
+              const headSha = pr.head.sha;
+
+              // PR opened -> title; synchronize -> latest commit message
+              let message = pr.title;
+              if (context.payload.action !== 'opened') {
+                const c = await github.rest.repos.getCommit({ ...repo, ref: headSha });
+                message = c.data.commit.message;
+              }
+
+              const diff_url = `${pr.html_url}/files`;
+              const filesArr = await github.paginate(
+                github.rest.pulls.listFiles,
+                { ...repo, pull_number: prNumber, per_page: 100 }
+              );
+              const files = filesArr.map(f => f.filename);
+
+              core.setOutput('notes', JSON.stringify({
+                actor, message, diff_url, files: topN(files), files_count: files.length
+              }));
+
+            } else {
+              core.setOutput('notes', JSON.stringify({
+                actor, message: 'ERROR', diff_url: '', files: [], files_count: 0
+              }));
+            }
+
+      - name: Format release text
+        id: format
+        uses: actions/github-script@v7
+        env:
+            NOTES: ${{ steps.collect.outputs.notes }}
+        with:
+          script: |
+            const notes = JSON.parse(process.env.NOTES || '{}');
+
+            const collapse = s => (s || '').replace(/\s+/g, ' ').trim();
+            const actor = notes.actor || '';
+            const message = collapse(notes.message || '');
+            const diffUrl = notes.diff_url || '';
+
+            const allFiles = Array.isArray(notes.files) ? notes.files : [];
+            const filesCount = Number(notes.files_count ?? allFiles.length);
+            const maxShow = 10; 
+            const shown = allFiles.slice(0, maxShow);
+            const more = Math.max(0, filesCount - shown.length);
+
+            const filesPart = shown.length
+              ? shown.join(', ') + (more > 0 ? ` … (+${more} more)` : '')
+              : 'none';
+
+            const out =
+              `${actor} - message: ${message} - files changed: ${filesPart} - ` +
+              `number files changed: ${filesCount} - diff url: ${diffUrl}`;
+
+            core.setOutput('release_text', out);

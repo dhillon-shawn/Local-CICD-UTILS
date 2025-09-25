@@ -1,0 +1,80 @@
+name: Compute Version
+description: Simulate version resolution without external calls
+branding:
+  icon: "package"
+  color: "purple"
+inputs:
+  target_env:      {  required: true, description: "" }
+  pid:              {  required: true, description: "" }
+
+outputs:
+  version:
+    value: ${{ steps.set.outputs.NEW_VERSION }}
+    description: ""
+
+runs:
+  using: composite
+  steps:
+
+    - name: Get latest version
+      id: get_latest_version
+      shell: bash
+      run: |
+        RESPONSE=$(
+          curl --location \
+            --header "Authorization: Bearer ${{ env.TOKEN }}" \
+            "${{ env.OR_URL }}/odata/Processes/UiPath.Server.Configuration.OData.GetProcessVersions(processId='${{inputs.pid}}')?%24orderby=Version%20desc&%24top=1&%24select=Version"
+        )
+        LATEST_VERSION=$(echo "$RESPONSE" | jq -r '.value[0].Version')
+        if [[ -z "$LATEST_VERSION" || "$LATEST_VERSION" == "null" ]]; then
+          LATEST_VERSION="0.0.0"
+        fi
+        echo "LATEST_VERSION=$LATEST_VERSION" >> "$GITHUB_ENV"
+
+
+    - name: Compute auto-bumped version
+      id: set
+      uses: actions/github-script@v7
+      env:
+        INPUT_VERSION: ${{ env.LATEST_VERSION }}
+      with:
+        script: |
+          const input = process.env.INPUT_VERSION ?? '';
+          console.log(`Latest Version: ${input}`);
+
+          const m = input.match(/[0-9]+(?:\.[0-9]+)*(?:[+-][A-Za-z0-9.-]+)?/);
+          if (!m) throw new Error('Could not parse a version from INPUT_VERSION');
+
+          const coreVer = m[0];
+          // Drop any prefixes or suffixes
+          const base = coreVer.split(/[+-]/, 1)[0];
+
+          const parts = base.split('.').filter(Boolean);
+          const N = parts.length;
+
+          const major = Number(parts[0] ?? 0);
+          if (!Number.isFinite(major)) throw new Error('Invalid major version');
+
+          const patch = N >= 2 ? Number(parts[N - 1] ?? 0) : 0;
+          if (!Number.isFinite(patch)) throw new Error('Invalid patch version');
+
+          let minor = 0;
+          if (N > 2) {
+            for (let i = 1; i < N - 1; i++) {
+              const v = Number(parts[i] ?? 0);
+              if (!Number.isFinite(v)) throw new Error(`Invalid minor component at index ${i}`);
+              minor += v;
+            }
+          }
+
+          const inc = patch + 1;
+          const newPatch = inc % 10;
+          const newMinor = minor + Math.floor(inc / 10);
+          const newVersion = `${major}.${newMinor}.${newPatch}`;
+
+          core.setOutput('NEW_VERSION', newVersion);
+          console.log(`Version: ${newVersion}`);
+
+
+
+

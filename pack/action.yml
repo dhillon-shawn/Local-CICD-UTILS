@@ -1,0 +1,76 @@
+name: Pack
+description: Package only deployment contents and upload artifact
+branding:
+  icon: "package"
+  color: "purple"
+inputs:
+  ptype: { required: true, description: "Project Type" }
+  version: { required: true, description: "Package version" }
+  release_notes: { required: true, description: "Release Notes" }
+
+
+runs:
+  using: composite
+  steps:
+
+      - name: stage for pack
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $env:RUNNER_TEMP 'uipack-stage'
+          if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+          New-Item -ItemType Directory -Path $stage | Out-Null
+
+          robocopy "${{ github.workspace }}" "$stage" /MIR `
+            /XD '.git' '.github' 'output' 'results' '.nuget-cache' '.nuget-http' '.nuget' 'packages' 'nuget.exe' `
+            /XF '*.nupkg' 'nuget.config'
+
+          $rc = $LASTEXITCODE
+          if ($rc -ge 8) { throw "robocopy failed with exit $rc" } else { Write-Host "robocopy exit $rc (OK)"; exit 0 }
+
+      - name: pack
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $env:RUNNER_TEMP 'uipack-stage'
+          $proj  = Join-Path $stage 'project.json'
+          if (-not (Test-Path $proj)) { throw "Staged project.json not found at $proj" }
+                  
+          $stageOut = Join-Path $stage 'output'
+          $repoOut  = Join-Path $env:GITHUB_WORKSPACE 'output'
+          New-Item -ItemType Directory -Force -Path $stageOut | Out-Null
+          New-Item -ItemType Directory -Force -Path $repoOut  | Out-Null
+
+          packages\UiPath.CLI.Windows.25.4.9337.28376\tools\uipcli.exe package pack "$proj" `
+            --output "$stageOut" `
+            --outputType '${{ inputs.ptype }}' `
+            -v '${{ inputs.version }}' `
+            --repositoryUrl 'https://github.com/${{ github.repository }}' `
+            --repositoryBranch '${{ github.ref_name }}' `
+            --repositoryCommit '${{ github.sha }}' `
+            --repositoryType 'git' `
+            --projectUrl 'https://project/url.com' `
+            --releaseNotes '${{ inputs.release_notes }}' `
+            --libraryOrchestratorUrl '${{ env.BASE_URL }}/' `
+            --libraryOrchestratorTenant '${{ env.TENANT }}' `
+            -A '${{ env.ORG }}' -I '${{ env.APP_ID }}' -S '${{ env.APP_SECRET }}' `
+            --libraryOrchestratorApplicationScope '${{ env.scope }}' `
+            --libraryIdentityUrl '${{ env.BASE_URL }}/identity_' `
+            --disableBuiltInNugetFeeds `
+            --traceLevel 'Verbose' -y 
+                    
+          Get-ChildItem "$stageOut" -Filter '*.nupkg' | ForEach-Object {
+            Copy-Item $_.FullName $repoOut -Force
+            Write-Host "Packaged: $($_.Name) -> $repoOut"
+          }
+            
+
+
+
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+              name: output
+              path: ./output/
+              if-no-files-found: error

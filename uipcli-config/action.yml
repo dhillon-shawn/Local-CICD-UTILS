@@ -1,0 +1,65 @@
+name: uipath cli configuration
+description: Install/Cache dotnet, nuget cli, uipath cli, and set nuget.config
+
+runs:
+  using: composite
+  steps:
+      - name: Ensure .NET 8 SDK
+        shell: powershell
+        run: |
+          $DotnetRoot = Join-Path $env:USERPROFILE '.dotnet'
+          $SdkGlob    = Join-Path (Join-Path $DotnetRoot 'sdk') '8.0.*'
+          $DotnetExe  = Join-Path $DotnetRoot 'dotnet.exe'
+
+          $has8 = (Test-Path $DotnetExe) -and (Get-ChildItem $SdkGlob -Directory -ErrorAction SilentlyContinue)
+
+          if (-not $has8) {
+            Write-Host "Installing .NET SDK 8.x to $DotnetRoot"
+            $Installer = Join-Path $env:RUNNER_TEMP 'dotnet-install.ps1'
+            Invoke-WebRequest -UseBasicParsing https://dot.net/v1/dotnet-install.ps1 -OutFile $Installer
+            powershell -NoProfile -ExecutionPolicy Bypass -File $Installer -Channel 8.0 -InstallDir $DotnetRoot -Quality GA
+          } else {
+            Write-Host "Reusing existing .NET SDK 8.x in $DotnetRoot"
+          }
+
+          $DotnetRoot | Out-File -FilePath $env:GITHUB_PATH -Append
+          "DOTNET_ROOT=$DotnetRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          & $DotnetExe --info
+
+      - name: Cache UiPath CLI v1
+        uses: actions/cache@v4
+        with:
+          path: packages
+          key: uipcli-25.4.9337.28376
+
+      - name: Check UiPath CLI
+        id: check-uipcli
+        shell: powershell
+        run: |
+          $cmd = Get-Command packages\UiPath.CLI.Windows.25.4.9337.28376\tools\uipcli.exe -ErrorAction SilentlyContinue
+          if ($cmd) {
+            "has_uipcli=true"  >> $env:GITHUB_OUTPUT
+            Write-Host "Found uipcli in $((Split-Path $cmd.Source -Parent))"
+          } else {
+            "has_uipcli=false" >> $env:GITHUB_OUTPUT
+            Write-Host "uipcli not found on PATH"
+          }
+            
+      - name: Setup NuGet CLI
+        if: steps.check-uipcli.outputs.has_uipcli != 'true'
+        shell: cmd
+        run: |
+          curl.exe -o nuget.exe -L https://dist.nuget.org/win-x86-commandline/latest/nuget.exe
+          
+      - name: Install UiPath CLI
+        if: steps.check-uipcli.outputs.has_uipcli != 'true'
+        shell: cmd
+        run: |
+          nuget.exe install UiPath.CLI.Windows -Version 25.4.9337.28376 -OutputDirectory packages -Source https://uipath.pkgs.visualstudio.com/Public.Feeds/_packaging/UiPath-Official/nuget/v3/index.json
+          
+      - name: Write nuget.config
+        shell: powershell
+        run: |
+          $uipcli = (Get-Command "packages\UiPath.CLI.Windows.25.4.9337.28376\tools\uipcli.exe").Source
+          Copy-Item '${{ github.workspace }}\nuget.config' -Destination (Split-Path $uipcli -Parent) -Force

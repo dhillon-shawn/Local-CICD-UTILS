@@ -1,0 +1,189 @@
+name: CD
+description: Continuos Deployment
+branding:
+  icon: "package"
+  color: "purple"
+inputs:
+  folder_name: { required: true, description: "" }
+  version: { required: true, description: "" }
+  pid: { required: true, description: "" }
+  target_env: { required: true, description: "" }
+
+
+runs:
+  using: composite
+  steps:
+
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+          name: output
+          path: ./output
+
+    - name: Publishing
+      shell: bash
+      run: |
+        PACKAGE_PATH=$(find output -name '*.nupkg' | head -n 1)
+        echo "Package Path: $PACKAGE_PATH"
+        echo "Publishing Package to Tenant Feed "
+
+        response=$(curl  --location \
+          --header "Authorization: Bearer ${{ env.TOKEN }}" \
+          --form "file=@$PACKAGE_PATH" \
+          "${{ env.OR_URL }}/odata/Processes/UiPath.Server.Configuration.OData.UploadPackage()"
+        )
+        echo "Publish Response: $response"
+
+
+    - name: check release
+      shell: bash
+      run: |
+        echo "checking release"
+        body="$(mktemp)"
+        trap 'rm -f "$body"' EXIT
+
+        curl_rc=0
+        status=$(
+          curl -L -sS \
+            --connect-timeout 10 --max-time 120 \
+            --output "$body" \
+            --write-out '%{http_code}' \
+            -H "Authorization: Bearer ${{ env.TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
+            "${{ env.OR_URL }}/odata/Releases?%24select=Id%2CProcessKey%2CName%2CProcessType&%24filter=ProcessKey%20eq%20%27${{ inputs.pid }}%27"
+        ) || curl_rc=$?
+
+        echo "Status Code: $status"
+        echo "::group::Response body"
+        if [[ -s "$body" ]] && command -v jq >/dev/null && jq -e . "$body" >/dev/null 2>&1; then
+          jq -r . "$body"
+        else
+          cat "$body"
+        fi
+        echo "::endgroup::"
+
+        id_found="$(jq -r '.value[0].Id // empty' "$body" 2>/dev/null || true)"
+        echo "id_found=$id_found" >> "$GITHUB_ENV"
+        if [ -n "$id_found" ]; then
+          echo "Release Id found"
+          echo "CREATE=false" >> "$GITHUB_ENV"
+        else
+          echo "Release Id NOT found"
+          echo "CREATE=true" >> "$GITHUB_ENV"
+        fi
+
+        if [[ $curl_rc -ne 0 || ${status:-0} -ge 400 ]]; then
+          exit 1
+        fi
+
+
+
+    - name: upgrade release
+      if: env.CREATE != 'true'
+      shell: bash
+      run: |
+        echo "ugrading release"
+        body="$(mktemp)"
+        trap 'rm -f "$body"' EXIT
+
+        curl_rc=0
+        status=$(
+          curl -L -sS \
+            --connect-timeout 10 --max-time 120 \
+            --output "$body" \
+            --write-out '%{http_code}' \
+            -X POST \
+            -H "Authorization: Bearer ${{ env.TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -H "Content-Length: 0" \
+            -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
+            "${{ env.OR_URL }}/odata/Releases(${{env.id_found}})/UiPath.Server.Configuration.OData.UpdateToLatestPackageVersion"
+        ) || curl_rc=$?
+
+        echo "Status Code: $status"
+        echo "::group::Response body"
+        if command -v jq >/dev/null; then jq -r . "$body" || cat "$body"; else cat "$body"; fi
+        echo "::endgroup::"
+
+        if [[ $curl_rc -ne 0 || ${status:-0} -ge 400 ]]; then
+          exit 1
+        fi
+
+
+
+
+    - name: update release
+      if: env.CREATE != 'true'
+      shell: bash
+      run: |
+        echo "updating release"
+        body="$(mktemp)"
+        trap 'rm -f "$body"' EXIT
+
+        curl_rc=0
+        status=$(
+          curl -L -sS \
+            --connect-timeout 10 --max-time 120 \
+            --output "$body" \
+            --write-out '%{http_code}' \
+            -X PATCH \
+            -H "Authorization: Bearer ${{  env.TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
+            --data-binary @- \
+            "${{ env.OR_URL }}/odata/Releases(${{ env.id_found}})" <<'JSON'
+        {
+          "Name": "${{ inputs.pid }}",
+          "ProcessKey": "${{ inputs.pid }}",
+          "ProcessVersion": "${{ inputs.version }}",
+          "Description": "https://github.com/${{ github.repository_owner }}/${{ github.repository }}"
+        }
+        JSON
+        ) || curl_rc=$?
+
+        echo "Status Code: $status"
+        echo "::group::Response body"
+        if command -v jq >/dev/null; then jq -r . "$body" || cat "$body"; else cat "$body"; fi
+        echo "::endgroup::"
+
+        if [[ $curl_rc -ne 0 || ${status:-0} -ge 400 ]]; then
+          exit 1
+        fi
+
+    - name: create release
+      shell: bash
+      if: env.CREATE == 'true'
+      run: |
+        echo "creating release"
+        body="$(mktemp)"
+        trap 'rm -f "$body"' EXIT
+
+        curl_rc=0
+        status=$(curl -L -sS \
+                  --connect-timeout 10 --max-time 120 \
+                  --output "$body" \
+                  --write-out '%{http_code}' \
+                  -X POST \
+                  -H "Authorization: Bearer ${{  env.TOKEN }}" \
+                  -H "Content-Type: application/json" \
+                  -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
+                  --data-binary @- \
+                  "${{ env.OR_URL }}/odata/Releases" <<'JSON'
+        {
+          "Name": "${{ inputs.pid }}",
+          "ProcessKey": "${{ inputs.pid }}",
+          "ProcessVersion": "${{ inputs.version }}",
+          "Description": "Repo https://github.com/${{ github.repository_owner }}/${{ github.repository }}"
+        }
+        JSON
+        ) || curl_rc=$?
+
+        echo "Status Code: $status"
+        echo "::group::Response body"
+        if command -v jq >/dev/null; then jq -r . "$body" || cat "$body"; else cat "$body"; fi
+        echo "::endgroup::"
+
+        if [[ $curl_rc -ne 0 || ${status:-0} -ge 400 ]]; then
+          exit 1
+        fi
