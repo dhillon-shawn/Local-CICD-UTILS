@@ -35,7 +35,7 @@ outputs:
 
       skip_ci:
         description: ""
-        value:        ${{ steps.tests.outputs.skip_ci }}
+        value:        ${{ steps.test.outputs.skip_ci }}
 
       pr_number:
         description: ""
