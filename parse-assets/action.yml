@@ -25,113 +25,198 @@ runs:
       run: |
         # --- imports ---
         from pathlib import Path
-        import json, re, os
+        import json, os, re, sys
         from lxml import etree
         from openpyxl import load_workbook
 
-        # --- helpers ---
-        def n(tag):  # strip namespace
+        # -------- logging helpers --------
+        def log(msg=""):
+            print(f"[parse-assets] {msg}")
+
+        # -------- small helpers --------
+        def strip_ns(tag: str) -> str:
+            """'{ns}Local' -> 'Local' (leave untouched if no ns)"""
             return tag.split('}', 1)[1] if '}' in tag else tag
 
-        STRS = re.compile(r'["\']([^"\']+)["\']')
-        def pick_strings(s):
-            if not s: return set()
-            return {m.group(1).strip() for m in STRS.finditer(s)}
+        QUOTED = re.compile(r'["\']([^"\']+)["\']')
+        def extract_literals(expr: str | None) -> set[str]:
+            """Return quoted string literals from an expression like [Config("Name")] or "Name"."""
+            if not expr:
+                return set()
+            return {m.group(1).strip() for m in QUOTED.finditer(expr)}
 
-        # --- Excel (Assets sheet) ---
-        def read_excel():
-            out = {}
-            for x in Path('.').rglob('Config.xlsx'):
-                if '.git' in x.parts: continue
+        def take_attr_value(val: str | None) -> set[str]:
+            """
+            Attributes in XAML often hold plain literals (e.g., AssetName="marco").
+            The XML parser gives us 'marco' (no quotes). So:
+              - if it looks like an expression or contains quotes, extract quoted strings
+              - otherwise, treat the raw value as the asset name
+            """
+            if not val:
+                return set()
+            if any(ch in val for ch in '[]"\''):
+                lits = extract_literals(val)
+                return lits if lits else ({val.strip()} if val.strip() else set())
+            return {val.strip()} if val.strip() else set()
+
+        # -------- Excel: read Assets sheet (Name + Type) --------
+        def read_excel_assets() -> dict[str, str]:
+            names: dict[str, str] = {}
+            cfg_files = list(Path(".").rglob("Config.xlsx"))
+            if cfg_files:
+                log(f"Excel scan: found {len(cfg_files)} Config.xlsx file(s)")
+            else:
+                log("Excel scan: no Config.xlsx files found")
+
+            for x in cfg_files:
+                if ".git" in x.parts:
+                    continue
                 try:
                     wb = load_workbook(str(x), data_only=True)
-                except Exception:
+                except Exception as e:
+                    log(f"Excel: failed to open {x}: {e}")
                     continue
-                sh = next((wb[s] for s in wb.sheetnames if s.strip().lower()=='assets'), None)
-                if not sh: continue
 
-                # header (first non-empty row)
-                hdr = None
-                for r in sh.iter_rows(min_row=1, max_row=5, values_only=True):
-                    if any(c not in (None,'') for c in r):
-                        hdr = [str(c).strip().lower() if c else '' for c in r]; break
-                if not hdr: continue
+                sheet = next((wb[s] for s in wb.sheetnames if s.strip().lower() == "assets"), None)
+                if not sheet:
+                    log(f"Excel: no 'Assets' sheet in {x}")
+                    continue
+                log(f"Excel: parsing 'Assets' in {x}")
 
-                def col(key):
-                    for i,h in enumerate(hdr):
-                        if key in h: return i
+                # header: first non-empty row (top 5)
+                header = None
+                for row in sheet.iter_rows(min_row=1, max_row=5, values_only=True):
+                    if any(c not in (None, "") for c in row):
+                        header = [str(c).strip().lower() if c else "" for c in row]
+                        break
+                if not header:
+                    log(f"Excel: header not found in {x}")
+                    continue
+
+                def col(want: str) -> int:
+                    for i, h in enumerate(header):
+                        if want in h:
+                            return i
                     return -1
 
-                i_name = col('name'); i_type = col('type')
-                if i_name == -1: i_name = 0  # fallback to col A
+                i_name = col("name")
+                i_type = col("type")
+                if i_name == -1:
+                    i_name = 0  # fallback to col A
 
-                for r in sh.iter_rows(min_row=2, values_only=True):
-                    if not r or i_name >= len(r): continue
-                    cell = r[i_name]
-                    if not cell: continue
+                added = 0
+                for row in sheet.iter_rows(min_row=2, values_only=True):
+                    if not row or i_name >= len(row):
+                        continue
+                    cell = row[i_name]
+                    if not cell:
+                        continue
                     name = str(cell).strip()
-                    typ  = 'Unknown'
-                    if i_type != -1 and i_type < len(r) and r[i_type]:
-                        typ = str(r[i_type]).strip()
-                    out[name] = typ
-            return out  # {name:type}
+                    if not name:
+                        continue
+                    atype = "Unknown"
+                    if i_type != -1 and i_type < len(row) and row[i_type]:
+                        atype = str(row[i_type]).strip()
+                    names[name] = atype
+                    added += 1
+                log(f"Excel: collected {added} asset name(s) from {x}")
 
-        # --- XAML (GetAsset, GetRobotAsset, GetCredential) ---
-        def read_xaml():
-            all_names, cred_names = set(), set()
-            ACTS = {'GetAsset', 'GetRobotAsset', 'GetCredential'}
-            KEYS = ('AssetName','Asset','Name')
-            SUF  = ('AssetName','Asset')
+            log(f"Excel: total unique assets collected = {len(names)}")
+            return names  # {name: type}
 
-            for p in Path('.').rglob('*.xaml'):
-                if '.git' in p.parts: continue
-                raw = p.read_text(encoding='utf-8', errors='ignore')
+        # -------- XAML: find GetAsset / GetRobotAsset / GetCredential --------
+        def read_xaml_assets() -> tuple[set[str], set[str]]:
+            all_names: set[str] = set()
+            cred_names: set[str] = set()
+
+            ACTS = {"GetAsset", "GetRobotAsset", "GetCredential"}
+            KEY_NAMES = ("AssetName", "Asset", "Name")
+            KEY_SUFFIX = ("AssetName", "Asset")
+
+            xaml_files = [p for p in Path(".").rglob("*.xaml") if ".git" not in p.parts]
+            if xaml_files:
+                log(f"XAML scan: found {len(xaml_files)} .xaml file(s)")
+            else:
+                log("XAML scan: no .xaml files found")
+
+            for p in xaml_files:
                 try:
-                    root = etree.fromstring(raw.encode('utf-8'),
-                                            parser=etree.XMLParser(recover=True, huge_tree=True))
-                except Exception:
+                    raw = p.read_text(encoding="utf-8", errors="ignore")
+                except Exception as e:
+                    log(f"XAML: failed to read {p}: {e}")
                     continue
 
-                for e in root.iter():
-                    tag = n(e.tag)
-                    if tag not in ACTS and not any(tag.endswith(a) for a in ACTS): 
+                try:
+                    root = etree.fromstring(raw.encode("utf-8"),
+                                            parser=etree.XMLParser(recover=True, huge_tree=True))
+                except Exception as e:
+                    log(f"XAML: parse error in {p}: {e}")
+                    continue
+
+                found_in_file = 0
+                for elem in root.iter():
+                    tag = strip_ns(elem.tag)
+                    if tag not in ACTS and not any(tag.endswith(a) for a in ACTS):
                         continue
-                    is_cred = (tag == 'GetCredential' or tag.endswith('GetCredential'))
-                    # attributes
-                    for k,v in e.attrib.items():
-                        key = n(k)
-                        if key in KEYS or key.endswith(SUF):
-                            for name in pick_strings(v):
-                                all_names.add(name)
-                                if is_cred: cred_names.add(name)
-                    # child props
-                    for c in e:
-                        key = n(c.tag)
-                        if key in KEYS or key.endswith(SUF) or '.AssetName' in key or '.Asset' in key:
-                            val = (c.text or '').strip()
-                            vals = {val} if val and '[' not in val and ']' not in val else pick_strings(val)
-                            for name in vals:
-                                all_names.add(name)
-                                if is_cred: cred_names.add(name)
+
+                    is_credential_activity = (tag == "GetCredential" or tag.endswith("GetCredential"))
+
+                    # --- attributes like AssetName="marco" ---
+                    for k, v in elem.attrib.items():
+                        key = strip_ns(k)
+                        if key in KEY_NAMES or key.endswith(KEY_SUFFIX):
+                            vals = take_attr_value(v)
+                            if vals:
+                                for n in vals:
+                                    all_names.add(n)
+                                    if is_credential_activity:
+                                        cred_names.add(n)
+                                    found_in_file += 1
+                                    log(f"XAML: {p.name} -> {tag} attribute {key} -> '{n}'")
+
+                    # --- child props like <ui:GetAsset.AssetName>MyAsset</...> ---
+                    for child in elem:
+                        key = strip_ns(child.tag)
+                        if key in KEY_NAMES or key.endswith(KEY_SUFFIX) or ".AssetName" in key or ".Asset" in key:
+                            txt = (child.text or "").strip()
+                            if txt and "[" not in txt and "]" not in txt:
+                                vals = {txt}
+                            else:
+                                vals = extract_literals(txt)
+                            if vals:
+                                for n in vals:
+                                    all_names.add(n)
+                                    if is_credential_activity:
+                                        cred_names.add(n)
+                                    found_in_file += 1
+                                    log(f"XAML: {p.name} -> {tag} element {key} -> '{n}'")
+
+                if found_in_file == 0:
+                    # Useful when debugging: shows files we scanned but found nothing in
+                    log(f"XAML: no assets found in {p}")
+
+            log(f"XAML: total unique names found = {len(all_names)}; credentials flagged = {len(cred_names)}")
             return all_names, cred_names
 
-        # --- merge + classify ---
-        ex = read_excel()                 # {name:type}
-        x_all, x_creds = read_xaml()      # sets
-        cred_from_excel = {n for n,t in ex.items() if t.lower() == 'credential'}
-        credentials = x_creds | cred_from_excel
-        migratable  = (set(ex) | x_all) - credentials
+        # -------- main: merge + classify --------
+        excel_map = read_excel_assets()          # {name: type}
+        xaml_all, xaml_creds = read_xaml_assets()
+
+        creds_from_excel = {n for n, t in excel_map.items() if t.lower() == "credential"}
+        credentials = set(xaml_creds) | creds_from_excel
+        migratable = (set(excel_map) | xaml_all) - credentials
 
         out = {
-          'migratable':  sorted(migratable,  key=str.casefold),
-          'credentials': sorted(credentials, key=str.casefold)
+            "migratable": sorted(migratable, key=str.casefold),
+            "credentials": sorted(credentials, key=str.casefold),
         }
 
-        path = Path(os.getenv('GITHUB_WORKSPACE','.')) / 'assets.json'
-        path.write_text(json.dumps(out, indent=2), encoding='utf-8')
+        out_path = Path(os.getenv("GITHUB_WORKSPACE", ".")) / "assets.json"
+        out_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
 
-        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-            f.write(f'assets_json_path={path}\n')
+        log(f"RESULT: migratable={len(out['migratable'])}, credentials={len(out['credentials'])}")
+        log(f"Wrote: {out_path}")
 
-
-
+        # expose the file path as an output for the action
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"assets_json_path={out_path}\n")
