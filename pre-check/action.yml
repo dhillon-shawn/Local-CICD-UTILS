@@ -23,103 +23,115 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - id: decide
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const out = { target_env: '', sha: '', rc_tag: '', pr_num: '', promote: 'false' };
+  - name: pre check
+    id: decide
+    uses: actions/github-script@v7
+    with:
+      script: |
+        const out = { target_env: '', sha: '', rc_tag: '', pr_num: '', promote: 'false' };
+        const hasLabel = (pr, name) =>
+          (pr.labels || []).some(l => String(l.name || '').toLowerCase() === name);
 
-          const isrelease = (ref) => String(ref || '').startsWith('release/');
-          const isHotfix  = (ref) => String(ref || '').startsWith('hotfix/');
+        if (context.eventName === 'push') {
+          const { owner, repo } = context.repo;
+          const assoc = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+            owner, repo, commit_sha: context.sha
+          });
+          if (!assoc.data?.length) {
+            core.setFailed(`Pre-check: no PR found for push sha=${context.sha}`);
+            return;
+          }
+          const pr = assoc.data.find(p => !p.draft) || assoc.data[0];
 
-          if (context.eventName === 'push') {
-            const { owner, repo } = context.repo;
-            const assoc = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-              owner, repo, commit_sha: context.sha
-            });
-            if (!assoc.data?.length) {
-              core.setFailed(`Pre-check: no PR found for push sha=${context.sha}`);
-              return;
-            }
-            const pr = assoc.data.find(p => !p.draft) || assoc.data[0];
+          out.pr_num     = String(pr.number);
+          out.rc_tag     = `rc-pr-${out.pr_num}`;
+          out.sha        = context.sha;
+          out.target_env = pr.draft ? 'dev' : 'test';
+          out.promote    = 'false'; // pushes always stage (dev/test)
 
-            out.pr_num  = String(pr.number);
-            out.rc_tag  = `rc-pr-${out.pr_num}`;
-            out.sha     = context.sha;
-            out.target_env = pr.draft ? 'dev' : 'test';
-            out.promote = 'false'; // pushes always go to stage (dev or test)
+        } else if (context.eventName === 'pull_request') {
+          const pr     = context.payload.pull_request;
+          const action = context.payload.action || '';
 
-          } else if (context.eventName === 'pull_request') {
-            const pr     = context.payload.pull_request;
-            const action = context.payload.action || '';
-            const head   = pr.head?.ref || '';
+          if (action === 'ready_for_review') {
+            // Promote latest dev build to test (create/refresh RC)
+            out.pr_num     = String(pr.number);
+            out.rc_tag     = `rc-pr-${out.pr_num}`;
+            out.target_env = 'test';
+            out.sha        = pr.head.sha;
+            out.promote    = 'true';
 
-            if (action === 'ready_for_review') {
-              // Promote the latest dev build to test (create/refresh RC)
-              out.pr_num    = String(pr.number);
-              out.rc_tag    = `rc-pr-${out.pr_num}`;
-              out.target_env= 'test';
-              out.sha       = pr.head.sha;
-              out.promote   = 'true';
-
-            } else if (action === 'closed') {
-              if (!pr.merged) {
-                // Closed without merge 
-                out.target_env = '';
-                out.sha = '';
-                out.promote = 'false';
-              } else if (isrelease(head)) {
-                // Merged release -> promote RC to prod 
-                out.pr_num    = String(pr.number);
-                out.rc_tag    = `rc-pr-${out.pr_num}`;
-                out.target_env= 'prod';
-                out.sha       = '';
-                out.promote   = 'true';
-              } else if (isHotfix(head)) {
-                // Merged hotfix -> stage to hotfix
-                out.target_env= 'hotfix';
-                out.pr_num    = String(pr.number);               
-                out.rc_tag    = `rc-pr-${out.pr_num}`;  
-                out.sha       = pr.merge_commit_sha || '';
-                out.promote   = 'false';
-              } else {
-                // Unknown branch type 
-                out.target_env = '';
-                out.sha = '';
-                out.promote = 'false';
-              }
-            } else {
-              // Any other PR event
+          } else if (action === 'closed') {
+            if (!pr.merged) {
+              // Closed without merge: no-op
               out.target_env = '';
-              out.sha = '';
-              out.promote = 'false';
-            }
+              out.sha        = '';
+              out.promote    = 'false';
+            } else {
+              // Label-based merge rules
+              const isRelease = hasLabel(pr, 'release');
+              const isProcess = hasLabel(pr, 'process');
+              const isLibrary = hasLabel(pr, 'library');
+              const isHotfix  = hasLabel(pr, 'hotfix');
 
+              out.pr_num = String(pr.number);
+              out.rc_tag = `rc-pr-${out.pr_num}`;
+
+              if (isRelease && isProcess) {
+                // release + process => prod + promote
+                out.target_env = 'prod';
+                out.sha        = '';
+                out.promote    = 'true';
+              } else if (isRelease && isLibrary) {
+                // release + library => hotfix + promote
+                out.target_env = 'hotfix';
+                out.sha        = '';
+                out.promote    = 'true';
+              } else if (isHotfix) {
+                // hotfix => hotfix (no promote)
+                out.target_env = 'hotfix';
+                out.sha        = pr.merge_commit_sha || '';
+                out.promote    = 'false';
+              } else {
+                // Other merged PRs => no-op
+                out.target_env = '';
+                out.sha        = '';
+                out.promote    = 'false';
+              }
+            }
           } else {
-            // Other
+            // Any other PR event: no-op
             out.target_env = '';
-            out.sha = '';
-            out.promote = 'false';
+            out.sha        = '';
+            out.promote    = 'false';
           }
 
-          core.setOutput('target_env', out.target_env);
-          core.setOutput('sha', out.sha);
-          core.setOutput('rc_tag', out.rc_tag);
-          core.setOutput('pr_num', out.pr_num);
-          core.setOutput('promote', out.promote);
+        } else {
+          // Other events: no-op
+          out.target_env = '';
+          out.sha        = '';
+          out.promote    = 'false';
+        }
 
-          console.log('pre-check:', out);
+        core.setOutput('target_env', out.target_env);
+        core.setOutput('sha', out.sha);
+        core.setOutput('rc_tag', out.rc_tag);
+        core.setOutput('pr_num', out.pr_num);
+        core.setOutput('promote', out.promote);
 
-          await core.summary.addRaw([
-            '### Pre-check decision',
-            `- event: \`${context.eventName}\` / action: \`${context.payload?.action || ''}\``,
-            `- target_env: \`${out.target_env}\``,
-            `- promote: \`${out.promote}\``,
-            `- pr_num: \`${out.pr_num}\``,
-            `- rc_tag: \`${out.rc_tag}\``,
-            `- sha: \`${out.sha}\``,
-          ].join('\n')).write();
+        console.log('pre-check:', out);
 
-    - name: Write merge meta (only on merged PRs)
-      if: github.event.pull_request.merged == true
-      uses: dhillon-shawn/Local-CICD-UTILS/pr-merge@v0
+        await core.summary.addRaw([
+          '### Pre-check decision',
+          `- event: \`${context.eventName}\` / action: \`${context.payload?.action || ''}\``,
+          `- target_env: \`${out.target_env}\``,
+          `- promote: \`${out.promote}\``,
+          `- pr_num: \`${out.pr_num}\``,
+          `- rc_tag: \`${out.rc_tag}\``,
+          `- sha: \`${out.sha}\``,
+        ].join('\n')).write();
+
+
+  - name: Write merge meta (only on merged PRs)
+    if: github.event.pull_request.merged == true
+    uses: dhillon-shawn/Local-CICD-UTILS/pr-merge@v0

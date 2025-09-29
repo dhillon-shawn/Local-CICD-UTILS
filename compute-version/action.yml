@@ -6,6 +6,7 @@ branding:
 inputs:
   target_env:      {  required: true, description: "" }
   pid:              {  required: true, description: "" }
+  bump_major:              {  required: true, description: "" }
 
 outputs:
   version:
@@ -31,22 +32,26 @@ runs:
         fi
         echo "LATEST_VERSION=$LATEST_VERSION" >> "$GITHUB_ENV"
 
-
+          
     - name: Compute auto-bumped version
       id: set
       uses: actions/github-script@v7
       env:
-        INPUT_VERSION: ${{ env.LATEST_VERSION }}
+        INPUT_VERSION: ${{ env.LATEST_VERSION }} # or wire a composite input if you have one
+        BUMP_MAJOR: ${{ inputs.bump_major }}     # boolean-like string: 'true'/'false'
       with:
         script: |
           const input = process.env.INPUT_VERSION ?? '';
+          const bumpMajor = String(process.env.BUMP_MAJOR).toLowerCase() === 'true';
+
           console.log(`Latest Version: ${input}`);
+          console.log(`bumpMajor: ${bumpMajor}`);
 
           const m = input.match(/[0-9]+(?:\.[0-9]+)*(?:[+-][A-Za-z0-9.-]+)?/);
           if (!m) throw new Error('Could not parse a version from INPUT_VERSION');
 
           const coreVer = m[0];
-          // Drop any prefixes or suffixes
+          // Drop pre/suffixes
           const base = coreVer.split(/[+-]/, 1)[0];
 
           const parts = base.split('.').filter(Boolean);
@@ -55,22 +60,29 @@ runs:
           const major = Number(parts[0] ?? 0);
           if (!Number.isFinite(major)) throw new Error('Invalid major version');
 
-          const patch = N >= 2 ? Number(parts[N - 1] ?? 0) : 0;
-          if (!Number.isFinite(patch)) throw new Error('Invalid patch version');
+          let newVersion;
 
-          let minor = 0;
-          if (N > 2) {
-            for (let i = 1; i < N - 1; i++) {
-              const v = Number(parts[i] ?? 0);
-              if (!Number.isFinite(v)) throw new Error(`Invalid minor component at index ${i}`);
-              minor += v;
+          if (bumpMajor) {
+            newVersion = `${major + 1}.0.0`;
+          } else {
+            const patchRaw = N >= 2 ? Number(parts[N - 1] ?? 0) : 0;
+            if (!Number.isFinite(patchRaw)) throw new Error('Invalid patch version');
+
+            let minor = 0;
+            if (N > 2) {
+              for (let i = 1; i < N - 1; i++) {
+                const v = Number(parts[i] ?? 0);
+                if (!Number.isFinite(v)) throw new Error(`Invalid minor component at index ${i}`);
+                minor += v;
+              }
             }
-          }
 
-          const inc = patch + 1;
-          const newPatch = inc % 10;
-          const newMinor = minor + Math.floor(inc / 10);
-          const newVersion = `${major}.${newMinor}.${newPatch}`;
+            const inc = patchRaw + 1;
+            const newPatch = inc % 10;
+            const newMinor = minor + Math.floor(inc / 10);
+
+            newVersion = `${major}.${newMinor}.${newPatch}`;
+          }
 
           core.setOutput('NEW_VERSION', newVersion);
           console.log(`Version: ${newVersion}`);

@@ -37,6 +37,10 @@ outputs:
         description: ""
         value:        ${{ steps.test.outputs.skip_ci }}
 
+      bump_major:
+        description: ""
+        value:        ${{ steps.version.outputs.bump_major }}
+
       pr_number:
         description: ""
         value:           ${{ steps.pr.outputs.PR_NUMBER }}
@@ -98,7 +102,7 @@ runs:
             echo "Last commit message:"
             echo "$msg"
 
-            if printf '%s' "$msg" | grep -qiE '\[[[:space:]]*skip([[:space:]]*tests?)?[[:space:]]*\]'; then
+            if printf '%s' "$msg" | grep -qiE '\[[[:space:]]*skip([[:space:]]+tests?)?[[:space:]]*\]'; then
               has_skip_tag=true
               echo "Detected [skip]/[skip test]/[skip tests] tag  CI should be skipped."
             else
@@ -113,10 +117,29 @@ runs:
               echo "skip_ci=true" >> "$GITHUB_OUTPUT"
               echo "Result: skip_ci is true "
             fi
+            
+      - name: Check message for version directive
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          msg="$(git log -1 --pretty=%B || true)"
+          echo "Message to inspect:"
+          echo "$msg"
+
+          if printf '%s' "$msg" | grep -qiE '\[[[:space:]]*(v|ver|version)[[:space:]]*\]'; then
+            echo "bump_major=true"  >> "$GITHUB_OUTPUT"
+            echo "Result: bump major is true"
+          else
+            echo "bump_major=false" >> "$GITHUB_OUTPUT"
+            echo "Result: bump major is false"
+          fi
+
+
 
       - name: Parse project output type from designOptions
         shell: bash
-        if: inputs.everything != 'false'
         id: ptype
         run: |
           ptype=$(jq -r '.designOptions.outputType' project.json)

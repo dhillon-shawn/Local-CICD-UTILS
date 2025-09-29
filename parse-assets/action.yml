@@ -1,0 +1,31 @@
+name: "UiPath Assets: scan to JSON"
+description: "Find UiPath asset names from XAML and Data/Config.xlsx, output assets.json"
+outputs:
+  assets_json_path:
+    description: "Absolute path to the generated assets.json"
+    value: ${{ steps.scan-assets.outputs.assets_json_path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install minimal deps
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install lxml openpyxl
+
+    - name: Make scanner executable
+      shell: bash
+      run: chmod +x "${{ github.action_path }}/scan-assets.py"
+
+    - name: Scan UiPath assets
+      shell: bash
+      run: |
+        "${{ github.action_path }}/scan-assets.py"
+        echo "assets_json_path=$GITHUB_WORKSPACE/assets.json" >> $GITHUB_OUTPUT
+

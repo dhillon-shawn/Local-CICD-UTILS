@@ -8,6 +8,7 @@ inputs:
   version: { required: true, description: "" }
   pid: { required: true, description: "" }
   target_env: { required: true, description: "" }
+  ptype: { required: true, description: "" }
 
 
 runs:
@@ -37,6 +38,7 @@ runs:
 
     - name: check release
       shell: bash
+      if: inputs.ptype == 'Process'
       run: |
         echo "checking release"
         body="$(mktemp)"
@@ -80,7 +82,7 @@ runs:
 
 
     - name: upgrade release
-      if: env.CREATE != 'true'
+      if: env.CREATE != 'true' && inputs.ptype == 'Process'
       shell: bash
       run: |
         echo "ugrading release"
@@ -114,7 +116,7 @@ runs:
 
 
     - name: update release
-      if: env.CREATE != 'true'
+      if: env.CREATE != 'true' && inputs.ptype == 'Process'
       shell: bash
       run: |
         echo "updating release"
@@ -153,7 +155,7 @@ runs:
 
     - name: create release
       shell: bash
-      if: env.CREATE == 'true'
+      if: env.CREATE == 'true' && inputs.ptype == 'Process'
       run: |
         echo "creating release"
         body="$(mktemp)"
