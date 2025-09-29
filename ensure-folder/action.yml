@@ -5,17 +5,9 @@ branding:
   color: "purple"
 inputs:
     target_env:         {  required: true, description: "" }
-    pid:                {  required: true, description: "" }
-
     vars:  {  required: true, description: "" }
 
-outputs:
-  fid:
-    value: ${{ steps.ensure.outputs.FID }}
-    description: ""
-  base_folder_name:
-    value: ${{ steps.ensure.outputs.folder }}
-    description: ""
+
 
 runs:
   using: composite

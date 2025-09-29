@@ -83,13 +83,13 @@ runs:
                 out.sha        = '';
                 out.promote    = 'true';
               } else if (isRelease && isLibrary) {
-                // release + library => hotfix + promote
-                out.target_env = 'hotfix';
+              
+                out.target_env = 'prod-bypass';
                 out.sha        = '';
                 out.promote    = 'true';
               } else if (isHotfix) {
-                // hotfix => hotfix (no promote)
-                out.target_env = 'hotfix';
+    
+                out.target_env = 'prod-bypass';
                 out.sha        = pr.merge_commit_sha || '';
                 out.promote    = 'false';
               } else {

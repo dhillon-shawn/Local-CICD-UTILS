@@ -185,7 +185,7 @@ runs:
           case "${{ inputs.target_env }}" in
             dev)     envs='["dev"]' ;;
             test)    envs='["dev","test"]' ;;
-            hotfix) envs='["dev","test","prod"]' ;;
+            prod-bypass) envs='["dev","test","prod"]' ;;
             *) echo "Unknown target_env: ${{ inputs.target_env }}" >&2; exit 1 ;;
           esac
           echo "DEPLOYMENT_MATRIX={\"env\":$envs}" >> "$GITHUB_OUTPUT"
