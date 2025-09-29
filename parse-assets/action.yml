@@ -151,9 +151,5 @@ runs:
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
             f.write(f"assets_json_path={out_path}\n")
 
-    - name: Scan UiPath assets
-      shell: bash
-      run: |
-        "${{ github.action_path }}/scan-assets.py"
-        echo "assets_json_path=$GITHUB_WORKSPACE/assets.json" >> $GITHUB_OUTPUT
+
 
