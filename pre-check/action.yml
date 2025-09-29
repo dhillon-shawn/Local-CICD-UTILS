@@ -119,3 +119,7 @@ runs:
             `- rc_tag: \`${out.rc_tag}\``,
             `- sha: \`${out.sha}\``,
           ].join('\n')).write();
+
+    - name: Write merge meta (only on merged PRs)
+      if: github.event.pull_request.merged == true
+      uses: dhillon-shawn/Local-CICD-UTILS/pr-merge@v0
