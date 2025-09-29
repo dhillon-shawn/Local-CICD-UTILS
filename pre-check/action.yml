@@ -35,9 +35,11 @@ runs:
         if (context.eventName === 'push') {
           const { owner, repo } = context.repo;
 
+      
           const ref = context.ref || context.payload?.ref || '';
           const branch = ref.replace(/^refs\/heads\//, '');
 
+ 
           let defaultBranch = context.payload?.repository?.default_branch;
           if (!defaultBranch) {
             const repoInfo = await github.rest.repos.get({ owner, repo });
@@ -45,13 +47,14 @@ runs:
           }
 
           if (branch === defaultBranch) {
-            // Push to default branch => no-op; leave everything blank and promote=false
+
             out.target_env = '';
             out.sha        = '';
             out.rc_tag     = '';
             out.pr_num     = '';
             out.promote    = 'false';
           } else {
+   
             const assoc = await github.rest.repos.listPullRequestsAssociatedWithCommit({
               owner, repo, commit_sha: context.sha
             });
@@ -65,11 +68,63 @@ runs:
             out.rc_tag     = `rc-pr-${out.pr_num}`;
             out.sha        = context.sha;
             out.target_env = pr.draft ? 'dev' : 'test';
-            out.promote    = 'false';
+            out.promote    = 'false'; // pushes always stage (dev/test)
           }
 
         } else if (context.eventName === 'pull_request') {
-          // ... keep your existing PR logic unchanged ...
+
+          const pr     = context.payload.pull_request;
+          const action = context.payload.action || '';
+
+          if (action === 'ready_for_review') {
+
+            out.pr_num     = String(pr.number);
+            out.rc_tag     = `rc-pr-${out.pr_num}`;
+            out.target_env = 'test';
+            out.sha        = pr.head.sha;
+            out.promote    = 'true';
+
+          } else if (action === 'closed') {
+            if (!pr.merged) {
+
+              out.target_env = '';
+              out.sha        = '';
+              out.promote    = 'false';
+            } else {
+
+              const isRelease = hasLabel(pr, 'release');
+              const isProcess = hasLabel(pr, 'process');
+              const isLibrary = hasLabel(pr, 'library');
+              const isHotfix  = hasLabel(pr, 'hotfix');
+
+              out.pr_num = String(pr.number);
+              out.rc_tag = `rc-pr-${out.pr_num}`;
+
+              if (isRelease && isProcess) {
+                out.target_env = 'prod';
+                out.sha        = '';
+                out.promote    = 'true';
+              } else if (isRelease && isLibrary) {
+                out.target_env = 'prod-bypass';
+                out.sha        = '';
+                out.promote    = 'true';
+              } else if (isHotfix) {
+                out.target_env = 'prod-bypass';
+                out.sha        = pr.merge_commit_sha || '';
+                out.promote    = 'false';
+              } else {
+                // Other merged PRs => no-op
+                out.target_env = '';
+                out.sha        = '';
+                out.promote    = 'false';
+              }
+            }
+          } else {
+            out.target_env = '';
+            out.sha        = '';
+            out.promote    = 'false';
+          }
+
         } else {
           out.target_env = '';
           out.sha        = '';
@@ -93,6 +148,7 @@ runs:
           `- rc_tag: \`${out.rc_tag}\``,
           `- sha: \`${out.sha}\``,
         ].join('\n')).write();
+
 
 
   - name: Write merge meta (only on merged PRs)
