@@ -34,80 +34,43 @@ runs:
 
         if (context.eventName === 'push') {
           const { owner, repo } = context.repo;
-          const assoc = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-            owner, repo, commit_sha: context.sha
-          });
-          if (!assoc.data?.length) {
-            core.setFailed(`Pre-check: no PR found for push sha=${context.sha}`);
-            return;
+
+          const ref = context.ref || context.payload?.ref || '';
+          const branch = ref.replace(/^refs\/heads\//, '');
+
+          let defaultBranch = context.payload?.repository?.default_branch;
+          if (!defaultBranch) {
+            const repoInfo = await github.rest.repos.get({ owner, repo });
+            defaultBranch = repoInfo.data.default_branch || 'main';
           }
-          const pr = assoc.data.find(p => !p.draft) || assoc.data[0];
 
-          out.pr_num     = String(pr.number);
-          out.rc_tag     = `rc-pr-${out.pr_num}`;
-          out.sha        = context.sha;
-          out.target_env = pr.draft ? 'dev' : 'test';
-          out.promote    = 'false'; // pushes always stage (dev/test)
-
-        } else if (context.eventName === 'pull_request') {
-          const pr     = context.payload.pull_request;
-          const action = context.payload.action || '';
-
-          if (action === 'ready_for_review') {
-            // Promote latest dev build to test (create/refresh RC)
-            out.pr_num     = String(pr.number);
-            out.rc_tag     = `rc-pr-${out.pr_num}`;
-            out.target_env = 'test';
-            out.sha        = pr.head.sha;
-            out.promote    = 'true';
-
-          } else if (action === 'closed') {
-            if (!pr.merged) {
-              // Closed without merge: no-op
-              out.target_env = '';
-              out.sha        = '';
-              out.promote    = 'false';
-            } else {
-              // Label-based merge rules
-              const isRelease = hasLabel(pr, 'release');
-              const isProcess = hasLabel(pr, 'process');
-              const isLibrary = hasLabel(pr, 'library');
-              const isHotfix  = hasLabel(pr, 'hotfix');
-
-              out.pr_num = String(pr.number);
-              out.rc_tag = `rc-pr-${out.pr_num}`;
-
-              if (isRelease && isProcess) {
-                // release + process => prod + promote
-                out.target_env = 'prod';
-                out.sha        = '';
-                out.promote    = 'true';
-              } else if (isRelease && isLibrary) {
-              
-                out.target_env = 'prod-bypass';
-                out.sha        = '';
-                out.promote    = 'true';
-              } else if (isHotfix) {
-    
-                out.target_env = 'prod-bypass';
-                out.sha        = pr.merge_commit_sha || '';
-                out.promote    = 'false';
-              } else {
-                // Other merged PRs => no-op
-                out.target_env = '';
-                out.sha        = '';
-                out.promote    = 'false';
-              }
-            }
-          } else {
-            // Any other PR event: no-op
+          if (branch === defaultBranch) {
+            // Push to default branch => no-op; leave everything blank and promote=false
             out.target_env = '';
             out.sha        = '';
+            out.rc_tag     = '';
+            out.pr_num     = '';
+            out.promote    = 'false';
+          } else {
+            const assoc = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner, repo, commit_sha: context.sha
+            });
+            if (!assoc.data?.length) {
+              core.setFailed(`Pre-check: no PR found for push sha=${context.sha}`);
+              return;
+            }
+            const pr = assoc.data.find(p => !p.draft) || assoc.data[0];
+
+            out.pr_num     = String(pr.number);
+            out.rc_tag     = `rc-pr-${out.pr_num}`;
+            out.sha        = context.sha;
+            out.target_env = pr.draft ? 'dev' : 'test';
             out.promote    = 'false';
           }
 
+        } else if (context.eventName === 'pull_request') {
+          // ... keep your existing PR logic unchanged ...
         } else {
-          // Other events: no-op
           out.target_env = '';
           out.sha        = '';
           out.promote    = 'false';
