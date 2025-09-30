@@ -25,7 +25,9 @@ runs:
             -H "Authorization: Bearer ${{ env.TOKEN }}" \
             -H "Content-Type: application/json" \
             -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
-            "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered?%24filter=ValueType%20eq%20%27Text%27%20and%20(${{inputs.asset_filter}})&%24select=Name%2CStringValue"
+            --data-urlencode "\$filter=ValueType eq 'Text' and ${{inputs.asset_filter}}" \
+            --data-urlencode "\$select=Name,StringValue" \
+            "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered"
         ) || curl_rc=$?
 
         echo "Status Code: $status"
@@ -36,6 +38,10 @@ runs:
           cat "$body"
         fi
         echo "::endgroup::"
+        
+        if [[ $curl_rc -ne 0 || ${status:-0} -ge 400 ]]; then
+          exit 1
+        fi
 
     - name: GET values and build assets.values.json
       shell: bash
@@ -54,7 +60,9 @@ runs:
             -H "Authorization: Bearer ${{ env.TOKEN }}" \
             -H "Content-Type: application/json" \
             -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
-            "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered?%24filter=ValueType%20eq%20%27Integer%27%20and%20(${{inputs.asset_filter}})&%24select=Name%2CIntValue"
+            --data-urlencode "\$filter=ValueType eq 'Integer' and ${{inputs.asset_filter}}" \
+            --data-urlencode "\$select=Name,IntValue" \
+            "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered"
         ) || curl_rc=$?
 
         echo "Status Code: $status"
@@ -65,6 +73,10 @@ runs:
           cat "$body"
         fi
         echo "::endgroup::"
+        
+        if [[ $curl_rc -ne 0 || ${status:-0} -ge 400 ]]; then
+          exit 1
+        fi
 
     - name: GET values and build assets.values.json
       shell: bash
@@ -83,7 +95,9 @@ runs:
             -H "Authorization: Bearer ${{ env.TOKEN }}" \
             -H "Content-Type: application/json" \
             -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
-            "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered?%24filter=ValueType%20eq%20%27Bool%27%20and%20(${{inputs.asset_filter}})&%24select=Name%2CBoolValue"
+            --data-urlencode "\$filter=ValueType eq 'Bool' and ${{inputs.asset_filter}}" \
+            --data-urlencode "\$select=Name,BoolValue" \
+            "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered"
         ) || curl_rc=$?
 
         echo "Status Code: $status"
@@ -94,6 +108,10 @@ runs:
           cat "$body"
         fi
         echo "::endgroup::"
+        
+        if [[ $curl_rc -ne 0 || ${status:-0} -ge 400 ]]; then
+          exit 1
+        fi
         
     - name: Output path
       id: out
