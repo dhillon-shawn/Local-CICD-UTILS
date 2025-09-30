@@ -1,10 +1,8 @@
 name: "get-assets"
 description: "Batch GET UiPath asset values (Text/Integer/Bool) and write assets.values.json"
 inputs:
-  folder_name:    { description: "X-UIPATH-FolderPath value (e.g. 'Dev')", required: true }
-  text_names:     { description: "CSV of Text asset names", required: false, default: "" }
-  int_names:      { description: "CSV of Integer asset names", required: false, default: "" }
-  bool_names:     { description: "CSV of Bool asset names", required: false, default: "" }
+  folder_name:    { description: "X-UIPATH-FolderPath value", required: true }
+  asset_filter:  { description: "", required: true }
 runs:
   using: "composite"
   steps:
@@ -12,137 +10,91 @@ runs:
 
     - name: GET values and build assets.values.json
       shell: bash
-      env:
-        OR_URL:      ${{ inputs.or_url }}
-        TOKEN:       ${{ inputs.token }}
-        FOLDER:      ${{ inputs.folder_name }}
-        TEXT_NAMES:  ${{ inputs.text_names }}
-        INT_NAMES:   ${{ inputs.int_names }}
-        BOOL_NAMES:  ${{ inputs.bool_names }}
       run: |
         set -euo pipefail
+        echo "checking release"
+        body="$(mktemp)"
+        trap 'rm -f "$body"' EXIT
 
-        # ========== helpers ==========
-        trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; echo "${s%"${s##*[![:space:]]}"}"; }
+        curl_rc=0
+        status=$(
+          curl -L -sS \
+            --connect-timeout 10 --max-time 120 \
+            --output "$body" \
+            --write-out '%{http_code}' \
+            -H "Authorization: Bearer ${{ env.TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
+            "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered?%24filter=ValueType%20eq%20%27Text%27%20and%20(${{inputs.asset_filter}})&%24select=Name%2CStringValue"
+        ) || curl_rc=$?
 
-        make_or_clause() {
-          local csv="$1"; local -a parts=()
-          IFS=',' read -ra arr <<<"$csv"
-          for name in "${arr[@]}"; do
-            name="$(trim "$name")"
-            [[ -z "$name" ]] && continue
-            # Escape single quotes for OData (' -> '')
-            name="${name//\'/\'}"
-            parts+=("Name eq '$name'")
-          done
-          local IFS=' or '; echo "${parts[*]-}"
-        }
+        echo "Status Code: $status"
+        echo "::group::Response body"
+        if [[ -s "$body" ]] && command -v jq >/dev/null && jq -e . "$body" >/dev/null 2>&1; then
+          jq -r . "$body"
+        else
+          cat "$body"
+        fi
+        echo "::endgroup::"
 
-        fetch_type() {
-          # $1=ValueType (Text|Integer|Bool)  $2=select fields  $3=CSV names
-          local value_type="$1" select_fields="$2" csv_names="$3"
-          local clause; clause="$(make_or_clause "$csv_names")"
-          local tmp status curl_rc=0
-          tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+    - name: GET values and build assets.values.json
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "checking release"
+        body="$(mktemp)"
+        trap 'rm -f "$body"' EXIT
 
-          if [[ -z "$clause" ]]; then
-            echo '{"value":[]}' > "resp_${value_type}.json"
-            echo "204" > "status_${value_type}.txt"
-            echo "::notice title=GET ${value_type}::no names provided"
-            return
-          fi
+        curl_rc=0
+        status=$(
+          curl -L -sS \
+            --connect-timeout 10 --max-time 120 \
+            --output "$body" \
+            --write-out '%{http_code}' \
+            -H "Authorization: Bearer ${{ env.TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
+            "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered?%24filter=ValueType%20eq%20%27Integer%27%20and%20(${{inputs.asset_filter}})&%24select=Name%2CIntValue"
+        ) || curl_rc=$?
 
-          status=$(
-            curl -L -sS --get \
-              --connect-timeout 10 --max-time 120 \
-              --output "$tmp" \
-              --write-out '%{http_code}' \
-              -H "Authorization: Bearer ${TOKEN}" \
-              -H "X-UIPATH-FolderPath: ${FOLDER}" \
-              --data-urlencode "\$filter=ValueType eq '${value_type}' and (${clause})" \
-              --data-urlencode "\$select=${select_fields}" \
-              "${OR_URL}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered"
-          ) || curl_rc=$?
+        echo "Status Code: $status"
+        echo "::group::Response body"
+        if [[ -s "$body" ]] && command -v jq >/dev/null && jq -e . "$body" >/dev/null 2>&1; then
+          jq -r . "$body"
+        else
+          cat "$body"
+        fi
+        echo "::endgroup::"
 
-          cat "$tmp" > "resp_${value_type}.json"
-          echo "${status}" > "status_${value_type}.txt"
+    - name: GET values and build assets.values.json
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "checking release"
+        body="$(mktemp)"
+        trap 'rm -f "$body"' EXIT
 
-          echo "::group::GET ${value_type} (status=${status})"
-          if command -v jq >/dev/null; then jq -r . "resp_${value_type}.json" || cat "resp_${value_type}.json"; else cat "resp_${value_type}.json"; fi
-          echo "::endgroup::"
+        curl_rc=0
+        status=$(
+          curl -L -sS \
+            --connect-timeout 10 --max-time 120 \
+            --output "$body" \
+            --write-out '%{http_code}' \
+            -H "Authorization: Bearer ${{ env.TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
+            "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered?%24filter=ValueType%20eq%20%27Bool%27%20and%20(${{inputs.asset_filter}})&%24select=Name%2CBoolValue"
+        ) || curl_rc=$?
 
-          if [[ $curl_rc -ne 0 ]]; then
-            echo "::warning title=GET ${value_type}::curl rc=$curl_rc"
-          fi
-        }
-
-        # ========== fetch each type ==========
-        fetch_type "Bool"    "Name,BoolValue"   "$BOOL_NAMES"
-        fetch_type "Integer" "Name,IntValue"    "$INT_NAMES"
-        fetch_type "Text"    "Name,StringValue" "$TEXT_NAMES"
-
-        # ========== build output (bash loops; tiny jq for lookups/appends) ==========
-        # Start with empty array file
-        echo '[]' > assets.values.json
-
-        append_record() {
-          # $1=name  $2=type  $3=value_json  $4=status_code
-          local name="$1" type="$2" value_json="$3" status="$4"
-          # Use jq to append one object so JSON stays valid
-          jq --arg n "$name" --arg t "$type" --argjson v "$value_json" --argjson s "$status" \
-             '. + [{"asset_name":$n,"asset_type":$t,"asset_value":$v,"status_code":$s}]' \
-             assets.values.json > assets.values.json.tmp
-          mv assets.values.json.tmp assets.values.json
-        }
-
-        # Lookup helpers: extract value from response for a given name
-        # If found -> echoes the JSON value; returns 0
-        # If missing -> echoes 'null'; returns 1 (so we can tell 404 vs 503 using request status)
-        lookup_value() {
-          # $1=resp.json  $2=name  $3=field
-          local resp="$1" name="$2" field="$3"
-          if jq -e --arg n "$name" ".value[] | select(.Name==\$n) | has(\"$field\")" "$resp" >/dev/null; then
-            jq -r --arg n "$name" ".value[] | select(.Name==\$n) | .[\"$field\"]" "$resp"
-            return 0
-          else
-            echo "null"
-            return 1
-          fi
-        }
-
-        process_bucket() {
-          # $1=CSV names  $2=Type  $3=resp.json  $4=status.txt  $5=value field
-          local csv="$1" type="$2" resp="$3" status_file="$4" field="$5"
-          local http_status ok
-          http_status="$(cat "$status_file" | tr -d '\n' | tr -d '\r' || echo 0)"
-          # Consider <400 as OK; 0 means we skipped the request (treated OK so we mark 404 for missing)
-          if [[ "$http_status" =~ ^[0-9]+$ ]] && [[ "$http_status" -lt 400 ]]; then ok=1; else ok=0; fi
-
-          IFS=',' read -ra arr <<<"$csv"
-          for name in "${arr[@]}"; do
-            name="$(trim "$name")"
-            [[ -z "$name" ]] && continue
-
-            if value_json="$(lookup_value "$resp" "$name" "$field")"; then
-              append_record "$name" "$type" "$value_json" 200
-            else
-              # Missing in response: 404 if request OK, else 503
-              if [[ "$ok" -eq 1 ]]; then
-                append_record "$name" "$type" null 404
-              else
-                append_record "$name" "$type" null 503
-              fi
-            fi
-          done
-        }
-
-        process_bucket "$BOOL_NAMES"  "Bool"    "resp_Bool.json"    "status_Bool.txt"    "BoolValue"
-        process_bucket "$INT_NAMES"   "Integer" "resp_Integer.json" "status_Integer.txt" "IntValue"
-        process_bucket "$TEXT_NAMES"  "Text"    "resp_Text.json"    "status_Text.txt"    "StringValue"
-
-        echo "assets.values.json:"
-        jq -r '.[0:10]' assets.values.json || cat assets.values.json
-
+        echo "Status Code: $status"
+        echo "::group::Response body"
+        if [[ -s "$body" ]] && command -v jq >/dev/null && jq -e . "$body" >/dev/null 2>&1; then
+          jq -r . "$body"
+        else
+          cat "$body"
+        fi
+        echo "::endgroup::"
+        
     - name: Output path
       id: out
       shell: bash
