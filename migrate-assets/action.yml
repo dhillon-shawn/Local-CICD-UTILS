@@ -10,11 +10,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-  - name: Download results artifact
-    uses: actions/download-artifact@v4
-    with:
-          name: assets
-    continue-on-error: true
+
 
   - name: Migrate assets (POST/PATCH from list)
     shell: bash
