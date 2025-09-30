@@ -122,7 +122,7 @@ runs:
         set -euo pipefail
         jq -s '[.[].value[]]' strings.json ints.json bools.json > assets.json
         echo "Payload count: $(jq 'length' assets.json)"
-        jq '.[0:50]' assets.payloads.json || true
+        jq '.[0:50]' assets.json || true
 
 
 

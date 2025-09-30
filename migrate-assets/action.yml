@@ -1,6 +1,7 @@
 name: "migrate-assets"
 description: "POST/PATCH UiPath assets from assets.values.json; outputs migrated_ok and migrated_fail CSVs"
-
+inputs:
+  folder_name:    { description: "X-UIPATH-FolderPath value", required: true }
 
 runs:
   using: "composite"
@@ -13,8 +14,6 @@ runs:
 
   - name: Migrate assets (POST/PATCH from list)
     shell: bash
-    env:
-      FOLDER:  ${{ inputs.target_folder_name }}
     run: |
       set -euo pipefail
       test -f assets.json
@@ -29,41 +28,62 @@ runs:
         body=$(jq -c ".[$i]" assets.json)
         name=$(jq -r '.Name' <<<"$body")
 
-        # Find existing asset Id
         id=$(
           curl -sS -L \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "X-UIPATH-FolderPath: ${FOLDER}" \
+            -H "Authorization: Bearer ${{ env.TOKEN}}" \
+            -H "X-UIPATH-FolderPath: ${{ inputs.folder }}" \
             --get --data-urlencode "\$filter=Name eq '$name'" \
             "${OR_URL}/odata/Assets" \
           | jq -r '.value[0].Id // empty'
         )
+        echo " asset id: $id"
 
-        # Upsert
         if [[ -n "$id" ]]; then
+          response="$(mktemp)"
+          trap 'rm -f "$response"' EXIT
           status=$(
             curl -L -sS \
               --connect-timeout 10 --max-time 120 \
-              --write-out '%{http_code}' --output /dev/null \
+              --output "$response" \
+              --write-out '%{http_code}' \
               -X PATCH \
-              -H "Authorization: Bearer ${TOKEN}" \
+              -H "Authorization: Bearer ${{ env.TOKEN}}" \
               -H "Content-Type: application/json" \
-              -H "X-UIPATH-FolderPath: ${FOLDER}" \
+              -H "X-UIPATH-FolderPath: ${{ inputs.folder }}" \
               --data-binary "$body" \
               "${OR_URL}/odata/Assets(${id})"
           )
+          echo "Patch response: $status"
+          echo "::group::Response body"
+          if [[ -s "$response" ]] && command -v jq >/dev/null && jq -e . "$response" >/dev/null 2>&1; then
+            jq -r . "$response"
+          else
+            cat "$response"
+          fi
+          echo "::endgroup::"
         else
+          response="$(mktemp)"
+          trap 'rm -f "$response"' EXIT
           status=$(
             curl -L -sS \
               --connect-timeout 10 --max-time 120 \
-              --write-out '%{http_code}' --output /dev/null \
+              --output "$response" \
+              --write-out '%{http_code}' \
               -X POST \
-              -H "Authorization: Bearer ${TOKEN}" \
+              -H "Authorization: Bearer ${{ env.TOKEN }}" \
               -H "Content-Type: application/json" \
-              -H "X-UIPATH-FolderPath: ${FOLDER}" \
+              -H "X-UIPATH-FolderPath: ${{ inputs.folder }}" \
               --data-binary "$body" \
               "${OR_URL}/odata/Assets"
           )
+          echo "Post Response: $status"
+          echo "::group::Response body"
+          if [[ -s "$response" ]] && command -v jq >/dev/null && jq -e . "$response" >/dev/null 2>&1; then
+            jq -r . "$response"
+          else
+            cat "$response"
+          fi
+          echo "::endgroup::"
         fi
 
         echo "[$((i+1))/${total}] ${name} -> ${status}"
