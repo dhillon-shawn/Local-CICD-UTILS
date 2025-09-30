@@ -312,22 +312,27 @@ runs:
             ? `<tr><td style="padding:8px;border:1px solid #ddd;"><strong>${k}</strong></td><td style="padding:8px;border:1px solid #ddd;">${v}</td></tr>`
             : '';
 
-          const allAssetsRaw = (() => {
-            const s = (process.env.ASSET_NAMES || '').trim();
+          const parseAssetList = (s) => {
             if (!s) return [];
-            try { return JSON.parse(s.replace(/'/g, '"')); } catch { return []; }
-          })();
+            const t = String(s).trim();
 
-          const norm = (x) => String(x || '')
-            .replace(/^\s+|\s+$/g, '')           // trim
-            .replace(/^"(.*)"$|^'(.*)'$/, '$1$2') // strip wrapping quotes
-            .toLowerCase();                       // <-- drop if you want case-sensitive
+            try { const arr = JSON.parse(t); if (Array.isArray(arr)) return arr.map(String); } catch {}
 
-          const allAssets = allAssetsRaw
-            .map(a => String(a))
-            .filter(Boolean);
 
-          const allNormSet = new Set(allAssets.map(norm));
+            try { const arr = JSON.parse(t.replace(/'/g, '"')); if (Array.isArray(arr)) return arr.map(String); } catch {}
+
+            const m = t.match(/^\[\s*([\s\S]*?)\s*\]$/);
+            if (!m) return [];
+            return m[1]
+              .split(',')                                // split by comma
+              .map(x => x.replace(/^['"\s]+|['"\s]+$/g, '')) // trim + strip quotes
+              .filter(Boolean);
+          };
+
+          const allAssetsOriginal = parseAssetList(process.env.ASSET_NAMES || '');
+
+   
+          const norm = x => String(x).trim().toLowerCase();
 
           let state = { envs: {} };
           try {
@@ -335,24 +340,26 @@ runs:
               ? 'state.json'
               : (fs.existsSync('migration-state/state.json') ? 'migration-state/state.json' : null);
             if (p) state = JSON.parse(fs.readFileSync(p, 'utf8'));
-          } catch { /* ignore */ }
+          } catch { /* keep default */ }
 
+    
           const assetsRows = Object.entries(state.envs || {}).map(([e, v]) => {
-            const okOriginal = Array.from(new Set([...(v?.ok || [])])).map(String);
-            const okNormSet  = new Set(okOriginal.map(norm));
+            const okOriginal = Array.from(new Set([...(v?.ok || [])].map(String)));
+            const okSet = new Set(okOriginal.map(norm));
 
-            const notOriginal = allAssets.filter(a => !okNormSet.has(norm(a)));
+           
+            const notOriginal = allAssetsOriginal.filter(a => !okSet.has(norm(a)));
 
-            return (
-              row(`${e} — OK`,  okOriginal.join(', ')) +
-              row(`${e} — NOT`, notOriginal.join(', '))
-            );
+            return row(`${e} — OK`,  okOriginal.join(', ')) +
+                  row(`${e} — NOT`, notOriginal.join(', '));
           }).join('');
 
+       
           const assetsTable = assetsRows
             ? `<h3 style="margin:16px 0 8px 0;">Assets by Environment</h3>` +
               `<table style="border-collapse:collapse;width:100%;margin-bottom:16px;">${assetsRows}</table>`
             : '';
+
 
           const env = (process.env.TARGET_ENV || 'dev').toLowerCase();
           const bodyPath = (env === 'test') ? TEST_PATH : ANALYSIS_PATH;
