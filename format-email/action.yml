@@ -299,7 +299,7 @@ runs:
         VERSION:      ${{ inputs.version }}
         FOLDER_NAME:  ${{ inputs.folder_name }}
         PROJECT_ID:   ${{ inputs.project_id }}
-        ASSET_NAMES: ${{ inputs.asset_names }}
+        ASSET_NAMES:  ${{ inputs.asset_names }}
       with:
         script: |
           const fs = require('fs');
@@ -307,6 +307,11 @@ runs:
 
           const TEST_PATH = 'test.html';
           const ANALYSIS_PATH = 'analyze.html';
+
+          // helper must be declared BEFORE it's used
+          const row = (k, v) => v
+            ? `<tr><td style="padding:8px;border:1px solid #ddd;"><strong>${k}</strong></td><td style="padding:8px;border:1px solid #ddd;">${v}</td></tr>`
+            : '';
 
           const allAssets = (() => {
             const s = (process.env.ASSET_NAMES || '').trim();
@@ -330,13 +335,10 @@ runs:
                   row(`${e} — NOT`, not.join(', '));
           }).join('');
 
-  
           const assetsTable = assetsRows
             ? `<h3 style="margin:16px 0 8px 0;">Assets by Environment</h3>` +
               `<table style="border-collapse:collapse;width:100%;margin-bottom:16px;">${assetsRows}</table>`
             : '';
-
-
 
           const env = (process.env.TARGET_ENV || 'dev').toLowerCase();
           const bodyPath = (env === 'test') ? TEST_PATH : ANALYSIS_PATH;
@@ -345,7 +347,6 @@ runs:
             const m = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(html);
             return (m ? m[1] : html);
           };
-
 
           try { fs.statSync(bodyPath); } catch {
             fs.mkdirSync(path.dirname(bodyPath), { recursive: true });
@@ -360,17 +361,15 @@ runs:
 
           const cd = (process.env.CD_STATUS || '').toLowerCase();
           const overall = (cd === 'success') ? 'success' : 'failure';
-          const ok = (overall === 'success');
-          const ICON = ok ? '✅' : '❌';
-          const COLOR = ok ? '#2e7d32' : '#c62828';
-          const WORD = ok ? 'Successful' : 'Failed';
+          const okStatus = (overall === 'success');
+          const ICON = okStatus ? '✅' : '❌';
+          const COLOR = okStatus ? '#2e7d32' : '#c62828';
+          const WORD = okStatus ? 'Successful' : 'Failed';
 
           const subjectPrefix = (env === 'test') ? 'UiPath Test Report'
                                 : (env === 'dev') ? 'UiPath Analysis Report'
                                 : 'UiPath Report';
           const subject = `${subjectPrefix} - ${repo} #${process.env.GITHUB_RUN_NUMBER || ''}`;
-
-          const row = (k, v) => v ? `<tr><td style="padding:8px;border:1px solid #ddd;"><strong>${k}</strong></td><td style="padding:8px;border:1px solid #ddd;">${v}</td></tr>` : '';
 
           const statusHtml =
             `<h2 style="color:${COLOR};margin:0 0 12px 0;">${ICON} Deployment ${WORD} — ${env}</h2>` +
@@ -392,7 +391,7 @@ runs:
             '<!doctype html><html>',
             '<body style="font-family:Arial,Helvetica,sans-serif;margin:20px;color:#0f172a;">',
             statusHtml,
-            assetsTable, 
+            assetsTable,
             inner,
             button,
             '</body></html>'
@@ -406,6 +405,7 @@ runs:
           core.setOutput('subject', subject);
           core.setOutput('overall', overall);
           core.setOutput('attach_path', bodyPath);
+
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
