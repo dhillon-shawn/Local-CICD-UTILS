@@ -24,7 +24,6 @@ runs:
     - name: Install deps
       shell: bash
       run: |
-        python -m pip install --upgrade pip
         pip install lxml openpyxl
 
     - name: Scan UiPath assets
@@ -36,25 +35,23 @@ runs:
         from lxml import etree
         from openpyxl import load_workbook
 
-        # ---------- helpers ----------
+        # --- helpers ---
         def strip_ns(tag: str) -> str:
             return tag.split('}', 1)[1] if '}' in tag else tag
 
-        # quoted string finder used for expressions like [Config("MyAsset")] or "MyAsset"
         QUOTED = re.compile(r'["\']([^"\']+)["\']')
         def extract_literals(s: str | None) -> set[str]:
             if not s: return set()
             return {m.group(1).strip() for m in QUOTED.finditer(s)}
 
         def pick_attr_value(v: str | None) -> set[str]:
-            """Return plain literal OR quoted literals inside expressions."""
             if not v: return set()
             if any(ch in v for ch in '[]"\''):
                 lits = extract_literals(v)
                 return lits if lits else ({v.strip()} if v.strip() else set())
             return {v.strip()} if v.strip() else set()
 
-        # ---------- Excel: read names from Assets sheet ----------
+        # --- Excel: names from Assets sheet ---
         def read_excel_names() -> set[str]:
             names: set[str] = set()
             for x in Path(".").rglob("Config.xlsx"):
@@ -65,10 +62,10 @@ runs:
                 except Exception:
                     continue
                 sheet = next((wb[s] for s in wb.sheetnames if s.strip().lower() == "assets"), None)
-                if not sheet:
+                if not sheet: 
                     continue
 
-                # header detection (first non-empty row within top 5)
+                # header (first non-empty row in top 5)
                 header = None
                 for row in sheet.iter_rows(min_row=1, max_row=5, values_only=True):
                     if any(c not in (None, "") for c in row):
@@ -77,15 +74,13 @@ runs:
                 if not header:
                     continue
 
-                def find_col(key: str) -> int:
+                def col(key: str) -> int:
                     for i, h in enumerate(header):
-                        if key in h:
-                            return i
+                        if key in h: return i
                     return -1
 
-                i_name = find_col("name")
-                if i_name == -1:  # fallback to column A
-                    i_name = 0
+                i_name = col("name")
+                if i_name == -1: i_name = 0  # fallback to col A
 
                 for row in sheet.iter_rows(min_row=2, values_only=True):
                     if not row or i_name >= len(row): 
@@ -98,19 +93,22 @@ runs:
                         names.add(name)
             return names
 
-        # ---------- XAML: read names from GetAsset / GetRobotAsset / GetCredential ----------
+        # --- XAML: names from GetAsset / GetRobotAsset / GetCredential ---
         def read_xaml_names() -> set[str]:
             names: set[str] = set()
             ACTIVITIES = {"GetAsset", "GetRobotAsset", "GetCredential"}
             KEYS = ("AssetName", "Asset", "Name")
             SUFFIX = ("AssetName", "Asset")
 
-            xamls = [p for p in Path(".").rglob("*.xaml") if ".git" not in p.parts]
-            for p in xamls:
+            for p in Path(".").rglob("*.xaml"):
+                if ".git" in p.parts: 
+                    continue
                 try:
                     raw = p.read_text(encoding="utf-8", errors="ignore")
-                    root = etree.fromstring(raw.encode("utf-8"),
-                                            parser=etree.XMLParser(recover=True, huge_tree=True))
+                    root = etree.fromstring(
+                        raw.encode("utf-8"),
+                        parser=etree.XMLParser(recover=True, huge_tree=True)
+                    )
                 except Exception:
                     continue
 
@@ -119,36 +117,34 @@ runs:
                     if tag not in ACTIVITIES and not any(tag.endswith(a) for a in ACTIVITIES):
                         continue
 
-                    # attributes like AssetName="MyAsset"
+                    # attributes
                     for k, v in elem.attrib.items():
                         key = strip_ns(k)
                         if key in KEYS or key.endswith(SUFFIX):
                             names |= pick_attr_value(v)
 
-                    # child property elements like <ui:GetAsset.AssetName>MyAsset</...>
+                    # child props
                     for child in elem:
                         key = strip_ns(child.tag)
                         if key in KEYS or key.endswith(SUFFIX) or ".AssetName" in key or ".Asset" in key:
                             txt = (child.text or "").strip()
                             vals = {txt} if txt and "[" not in txt and "]" not in txt else extract_literals(txt)
-                            names |= {v for v in vals if v}
+                            names |= {vv for vv in vals if vv}
             return names
 
-        # ---------- collect all names ----------
+        # --- collect and build filter ---
         all_names = set()
         all_names |= read_excel_names()
         all_names |= read_xaml_names()
 
-        # ---------- build OData filter ----------
-        # OData escapes single quotes by doubling them: O'Brien -> O''Brien
-        parts = [f"Name eq '{n.replace(\"'\",\"''\")}'" for n in sorted(all_names, key=str.casefold)]
-        filter_str = f"({' or '.join(parts)})" if parts else ""
+        parts = []
+        for n in sorted(all_names, key=str.casefold):
+            esc = n.replace("'", "''")   # OData escaping for single quotes
+            parts.append(f"Name eq '{esc}'")
 
+        filter_str = f"({' or '.join(parts)})" if parts else ""
         print("[parse-assets] OData filter:")
         print(filter_str)
 
-        # output for the composite action
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
             f.write(f"odata_filter={filter_str}\n")
-
-
