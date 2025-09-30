@@ -8,11 +8,11 @@ runs:
   steps:
 
 
-    - name: GET values and build assets.values.json
+    - name: get string asset vals
       shell: bash
       run: |
         set -euo pipefail
-        echo "checking release"
+        echo "Getting Strings"
         body="$(mktemp)"
         trap 'rm -f "$body"' EXIT
 
@@ -31,6 +31,7 @@ runs:
         ) || curl_rc=$?
 
         echo "Status Code: $status"
+        cp "$body" strings.json
         echo "::group::Response body"
         if [[ -s "$body" ]] && command -v jq >/dev/null && jq -e . "$body" >/dev/null 2>&1; then
           jq -r . "$body"
@@ -43,11 +44,11 @@ runs:
           exit 1
         fi
 
-    - name: GET values and build assets.values.json
+    - name: Get int asset vals
       shell: bash
       run: |
         set -euo pipefail
-        echo "checking release"
+        echo "Getting ints"
         body="$(mktemp)"
         trap 'rm -f "$body"' EXIT
 
@@ -66,6 +67,7 @@ runs:
         ) || curl_rc=$?
 
         echo "Status Code: $status"
+        cp "$body" ints.json
         echo "::group::Response body"
         if [[ -s "$body" ]] && command -v jq >/dev/null && jq -e . "$body" >/dev/null 2>&1; then
           jq -r . "$body"
@@ -78,11 +80,11 @@ runs:
           exit 1
         fi
 
-    - name: GET values and build assets.values.json
+    - name: Get bool asset vals
       shell: bash
       run: |
         set -euo pipefail
-        echo "checking release"
+        echo "Getting bools"
         body="$(mktemp)"
         trap 'rm -f "$body"' EXIT
 
@@ -101,6 +103,7 @@ runs:
         ) || curl_rc=$?
 
         echo "Status Code: $status"
+        cp "$body" bools.json
         echo "::group::Response body"
         if [[ -s "$body" ]] && command -v jq >/dev/null && jq -e . "$body" >/dev/null 2>&1; then
           jq -r . "$body"
@@ -113,13 +116,46 @@ runs:
           exit 1
         fi
         
-    - name: Output path
+
+    - name: build simple outputs
       id: out
       shell: bash
-      run: echo "path=$GITHUB_WORKSPACE/assets.values.json" >> "$GITHUB_OUTPUT"
+      run: |
+        set -euo pipefail
+        test -f strings.json || echo '{"value":[]}' > strings.json
+        test -f ints.json    || echo '{"value":[]}' > ints.json
+        test -f bools.json   || echo '{"value":[]}' > bools.json
 
+        # one file with three maps
+        jq -n \
+          --slurpfile t strings.json \
+          --slurpfile i ints.json \
+          --slurpfile b bools.json '
+          {
+            text:    ( ($t[0].value // []) | map({key:.Name, value:.StringValue}) | from_entries ),
+            integer: ( ($i[0].value // []) | map({key:.Name, value:.IntValue   }) | from_entries ),
+            bool:    ( ($b[0].value // []) | map({key:.Name, value:.BoolValue  }) | from_entries )
+          }' > assets.values.simple.json
 
+        # also export as compact JSON strings (3 outputs)
+        text_json=$(jq -c '.text'    assets.json)
+        int_json=$(jq  -c '.integer' assets.json)
+        bool_json=$(jq -c '.bool'    assets.json)
+
+        echo "text_json=${text_json}"   >> "$GITHUB_OUTPUT"
+        echo "int_json=${int_json}"     >> "$GITHUB_OUTPUT"
+        echo "bool_json=${bool_json}"   >> "$GITHUB_OUTPUT"
+        echo "file=$GITHUB_WORKSPACE/assets.json" >> "$GITHUB_OUTPUT"
 outputs:
-  path:
-    description: "Path to assets.values.json"
-    value: ${{ steps.out.outputs.path }}
+  text_json:
+    description: "JSON map of Text assets (name->value)"
+    value: ${{ steps.out.outputs.text_json }}
+  int_json:
+    description: "JSON map of Integer assets (name->value)"
+    value: ${{ steps.out.outputs.int_json }}
+  bool_json:
+    description: "JSON map of Bool assets (name->value)"
+    value: ${{ steps.out.outputs.bool_json }}
+  file:
+    description: "Path to combined file"
+    value: ${{ steps.out.outputs.file }}
