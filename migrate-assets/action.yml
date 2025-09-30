@@ -7,6 +7,9 @@ inputs:
   asset_names:
     description: "CSV of all asset names from parse step"
     required: true
+  target:
+    description: "target env to migrate to"
+    required: true
 outputs:
   migrated:
     value: ${{ steps.migrate.outputs.migrated }}
@@ -117,8 +120,7 @@ runs:
       ok_json=$(printf '%s\n' "${ok[@]:-}"   | jq -R . | jq -s .)
       fail_json=$(printf '%s\n' "${fail[@]:-}" | jq -R . | jq -s .)
 
-          # Merge into state.json under this env; dedupe
-      jq --arg e "$ENV" --argjson newok "$ok_json" --argjson newfail "$fail_json" '
+      jq --arg e "${{ inputs.target }}" --argjson newok "$ok_json" --argjson newfail "$fail_json" '
         .envs[$e].ok     = ((.envs[$e].ok     // []) + $newok  | unique) |
         .envs[$e].failed = ((.envs[$e].failed // []) + $newfail| unique)
       ' state.json > state.new.json
