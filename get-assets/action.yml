@@ -1,13 +1,11 @@
 name: "get-assets"
-description: "Batch GET UiPath asset values (Text/Integer/Bool) and write assets.values.json"
+description: "Get assets values and create json file"
 inputs:
   folder_name:    { description: "X-UIPATH-FolderPath value", required: true }
   asset_filter:  { description: "", required: true }
 runs:
   using: "composite"
   steps:
-
-
     - name: get string asset vals
       shell: bash
       run: |
@@ -26,7 +24,7 @@ runs:
             -H "Content-Type: application/json" \
             -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
             --data-urlencode "\$filter=ValueType eq 'Text' and ${{inputs.asset_filter}}" \
-            --data-urlencode "\$select=Name,StringValue" \
+            --data-urlencode "\$select=Name,StringValue,ValueScope,ValueType" \
             "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered"
         ) || curl_rc=$?
 
@@ -62,7 +60,7 @@ runs:
             -H "Content-Type: application/json" \
             -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
             --data-urlencode "\$filter=ValueType eq 'Integer' and ${{inputs.asset_filter}}" \
-            --data-urlencode "\$select=Name,IntValue" \
+            --data-urlencode "\$select=Name,IntValue,ValueScope,ValueType" \
             "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered"
         ) || curl_rc=$?
 
@@ -98,7 +96,7 @@ runs:
             -H "Content-Type: application/json" \
             -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
             --data-urlencode "\$filter=ValueType eq 'Bool' and ${{inputs.asset_filter}}" \
-            --data-urlencode "\$select=Name,BoolValue" \
+            --data-urlencode "\$select=Name,BoolValue,ValueScope,ValueType" \
             "${{ env.OR_URL }}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered"
         ) || curl_rc=$?
 
@@ -117,45 +115,21 @@ runs:
         fi
         
 
-    - name: build simple outputs
+    - name: build json
       id: out
       shell: bash
       run: |
         set -euo pipefail
-        test -f strings.json || echo '{"value":[]}' > strings.json
-        test -f ints.json    || echo '{"value":[]}' > ints.json
-        test -f bools.json   || echo '{"value":[]}' > bools.json
+        jq -s '[.[].value[]]' strings.json ints.json bools.json > assets.json
+        echo "Payload count: $(jq 'length' assets.json)"
+        jq '.[0:50]' assets.payloads.json || true
 
-        # one file with three maps
-        jq -n \
-          --slurpfile t strings.json \
-          --slurpfile i ints.json \
-          --slurpfile b bools.json '
-          {
-            text:    ( ($t[0].value // []) | map({key:.Name, value:.StringValue}) | from_entries ),
-            integer: ( ($i[0].value // []) | map({key:.Name, value:.IntValue   }) | from_entries ),
-            bool:    ( ($b[0].value // []) | map({key:.Name, value:.BoolValue  }) | from_entries )
-          }' > assets.json
 
-        # also export as compact JSON strings (3 outputs)
-        text_json=$(jq -c '.text'    assets.json)
-        int_json=$(jq  -c '.integer' assets.json)
-        bool_json=$(jq -c '.bool'    assets.json)
 
-        echo "text_json=${text_json}"   >> "$GITHUB_OUTPUT"
-        echo "int_json=${int_json}"     >> "$GITHUB_OUTPUT"
-        echo "bool_json=${bool_json}"   >> "$GITHUB_OUTPUT"
-        echo "file=$GITHUB_WORKSPACE/assets.json" >> "$GITHUB_OUTPUT"
-outputs:
-  text_json:
-    description: "JSON map of Text assets (name->value)"
-    value: ${{ steps.out.outputs.text_json }}
-  int_json:
-    description: "JSON map of Integer assets (name->value)"
-    value: ${{ steps.out.outputs.int_json }}
-  bool_json:
-    description: "JSON map of Bool assets (name->value)"
-    value: ${{ steps.out.outputs.bool_json }}
-  file:
-    description: "Path to combined file"
-    value: ${{ steps.out.outputs.file }}
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      continue-on-error: true
+      with:
+          name: assets
+          path: ./assets.json
+

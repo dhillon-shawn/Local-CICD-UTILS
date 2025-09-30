@@ -1,129 +1,85 @@
 name: "migrate-assets"
 description: "POST/PATCH UiPath assets from assets.values.json; outputs migrated_ok and migrated_fail CSVs"
-inputs:
-  folder_name: { description: "X-UIPATH-FolderPath value", required: true }
-  text_json:   { description: "JSON map (name->string)", required: false, default: "{}" }
-  int_json:    { description: "JSON map (name->int)",    required: false, default: "{}" }
-  bool_json:   { description: "JSON map (name->bool)",   required: false, default: "{}" }
-  file:        { description: "Optional path to assets.values.simple.json", required: false, default: "" }
+
 
 runs:
   using: "composite"
   steps:
+  - name: Download results artifact
+    uses: actions/download-artifact@v4
+    with:
+          name: assets
+    continue-on-error: true
 
+  - name: Migrate assets (POST/PATCH from list)
+    shell: bash
+    env:
+      FOLDER:  ${{ inputs.target_folder_name }}
+    run: |
+      set -euo pipefail
+      test -f assets.json
 
-    - name: Load maps (prefer inputs, else file)
-      id: load
-      shell: bash
-      env:
-        TEXT_JSON: ${{ inputs.text_json }}
-        INT_JSON:  ${{ inputs.int_json }}
-        BOOL_JSON: ${{ inputs.bool_json }}
-        FILE:      ${{ inputs.file }}
-      run: |
-        set -euo pipefail
-        if [[ -n "$FILE" && -f "$FILE" ]]; then
-          tj=$(jq -c '.text'    "$FILE")
-          ij=$(jq -c '.integer' "$FILE")
-          bj=$(jq -c '.bool'    "$FILE")
+      ok=()
+      fail=()
+
+      total=$(jq 'length' assets.json)
+      echo "Migrating ${total} assets..."
+
+      for ((i=0; i<total; i++)); do
+        body=$(jq -c ".[$i]" assets.json)
+        name=$(jq -r '.Name' <<<"$body")
+
+        # Find existing asset Id
+        id=$(
+          curl -sS -L \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "X-UIPATH-FolderPath: ${FOLDER}" \
+            --get --data-urlencode "\$filter=Name eq '$name'" \
+            "${OR_URL}/odata/Assets" \
+          | jq -r '.value[0].Id // empty'
+        )
+
+        # Upsert
+        if [[ -n "$id" ]]; then
+          status=$(
+            curl -L -sS \
+              --connect-timeout 10 --max-time 120 \
+              --write-out '%{http_code}' --output /dev/null \
+              -X PATCH \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "X-UIPATH-FolderPath: ${FOLDER}" \
+              --data-binary "$body" \
+              "${OR_URL}/odata/Assets(${id})"
+          )
         else
-          tj="$TEXT_JSON"; ij="$INT_JSON"; bj="$BOOL_JSON"
+          status=$(
+            curl -L -sS \
+              --connect-timeout 10 --max-time 120 \
+              --write-out '%{http_code}' --output /dev/null \
+              -X POST \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "X-UIPATH-FolderPath: ${FOLDER}" \
+              --data-binary "$body" \
+              "${OR_URL}/odata/Assets"
+          )
         fi
-        echo "tj=$tj" >> "$GITHUB_OUTPUT"
-        echo "ij=$ij" >> "$GITHUB_OUTPUT"
-        echo "bj=$bj" >> "$GITHUB_OUTPUT"
 
-    - name: Upsert
-      id: run
-      shell: bash
-      env:
-        OR_URL:  ${{ inputs.or_url }}
-        TOKEN:   ${{ inputs.token }}
-        FOLDER:  ${{ inputs.folder_name }}
-        TJ:      ${{ steps.load.outputs.tj }}
-        IJ:      ${{ steps.load.outputs.ij }}
-        BJ:      ${{ steps.load.outputs.bj }}
-      run: |
-        set -euo pipefail
-        ok=()
-        fail=()
-        results='[]'
+        echo "[$((i+1))/${total}] ${name} -> ${status}"
 
-        # --- Text loop ---
-        for name in $(jq -r 'keys[]' <<<"$TJ"); do
-          v=$(jq -r --arg n "$name" '.[$n]' <<<"$TJ")
-          id=$(curl -sS -L -H "Authorization: Bearer ${TOKEN}" -H "X-UIPATH-FolderPath: ${FOLDER}" --get \
-                 --data-urlencode "\$filter=Name eq '$name'" "${OR_URL}/odata/Assets" | jq -r '.value[0].Id // empty')
-          body=$(jq -n --arg n "$name" --arg v "$v" '{Name:$n, ValueScope:"Global", ValueType:"Text", StringValue:$v}')
-          if [[ -n "$id" ]]; then
-            status=$(curl -L -sS --connect-timeout 10 --max-time 120 --write-out '%{http_code}' --output /dev/null \
-                       -X PATCH -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -H "X-UIPATH-FolderPath: ${FOLDER}" \
-                       --data-binary "$body" "${OR_URL}/odata/Assets(${id})")
-          else
-            status=$(curl -L -sS --connect-timeout 10 --max-time 120 --write-out '%{http_code}' --output /dev/null \
-                       -X POST  -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -H "X-UIPATH-FolderPath: ${FOLDER}" \
-                       --data-binary "$body" "${OR_URL}/odata/Assets")
-          fi
-          if [[ ${status:-0} -ge 200 && ${status:-0} -lt 400 ]]; then ok+=("$name"); else fail+=("$name"); fi
-          results=$(jq --arg n "$name" --arg t "Text" --arg v "$v" --argjson s "${status:-0}" \
-                     '. + [{"asset_name":$n,"asset_type":$t,"asset_value":$v,"status_code":$s}]' <<<"$results")
-        done
+        if [[ ${status:-0} -ge 200 && ${status:-0} -lt 400 ]]; then
+          ok+=("$name")
+        else
+          fail+=("$name")
+        fi
+      done
 
-        # --- Integer loop ---
-        for name in $(jq -r 'keys[]' <<<"$IJ"); do
-          v=$(jq -r --arg n "$name" '.[$n]' <<<"$IJ")
-          id=$(curl -sS -L -H "Authorization: Bearer ${TOKEN}" -H "X-UIPATH-FolderPath: ${FOLDER}" --get \
-                 --data-urlencode "\$filter=Name eq '$name'" "${OR_URL}/odata/Assets" | jq -r '.value[0].Id // empty')
-          body=$(jq -n --arg n "$name" --argjson v "$v" '{Name:$n, ValueScope:"Global", ValueType:"Integer", IntValue:$v}')
-          if [[ -n "$id" ]]; then
-            status=$(curl -L -sS --connect-timeout 10 --max-time 120 --write-out '%{http_code}' --output /dev/null \
-                       -X PATCH -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -H "X-UIPATH-FolderPath: ${FOLDER}" \
-                       --data-binary "$body" "${OR_URL}/odata/Assets(${id})")
-          else
-            status=$(curl -L -sS --connect-timeout 10 --max-time 120 --write-out '%{http_code}' --output /dev/null \
-                       -X POST  -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -H "X-UIPATH-FolderPath: ${FOLDER}" \
-                       --data-binary "$body" "${OR_URL}/odata/Assets")
-          fi
-          if [[ ${status:-0} -ge 200 && ${status:-0} -lt 400 ]]; then ok+=("$name"); else fail+=("$name"); fi
-          results=$(jq --arg n "$name" --arg t "Integer" --argjson v "$v" --argjson s "${status:-0}" \
-                     '. + [{"asset_name":$n,"asset_type":$t,"asset_value":$v,"status_code":$s}]' <<<"$results")
-        done
+      ok_csv=$(IFS=,; echo "${ok[*]-}")
+      fail_csv=$(IFS=,; echo "${fail[*]-}")
 
-        # --- Bool loop ---
-        for name in $(jq -r 'keys[]' <<<"$BJ"); do
-          v=$(jq -r --arg n "$name" '.[$n]' <<<"$BJ")
-          id=$(curl -sS -L -H "Authorization: Bearer ${TOKEN}" -H "X-UIPATH-FolderPath: ${FOLDER}" --get \
-                 --data-urlencode "\$filter=Name eq '$name'" "${OR_URL}/odata/Assets" | jq -r '.value[0].Id // empty')
-          body=$(jq -n --arg n "$name" --argjson v "$v" '{Name:$n, ValueScope:"Global", ValueType:"Bool", BoolValue:$v}')
-          if [[ -n "$id" ]]; then
-            status=$(curl -L -sS --connect-timeout 10 --max-time 120 --write-out '%{http_code}' --output /dev/null \
-                       -X PATCH -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -H "X-UIPATH-FolderPath: ${FOLDER}" \
-                       --data-binary "$body" "${OR_URL}/odata/Assets(${id})")
-          else
-            status=$(curl -L -sS --connect-timeout 10 --max-time 120 --write-out '%{http_code}' --output /dev/null \
-                       -X POST  -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" -H "X-UIPATH-FolderPath: ${FOLDER}" \
-                       --data-binary "$body" "${OR_URL}/odata/Assets")
-          fi
-          if [[ ${status:-0} -ge 200 && ${status:-0} -lt 400 ]]; then ok+=("$name"); else fail+=("$name"); fi
-          results=$(jq --arg n "$name" --arg t "Bool" --argjson v "$v" --argjson s "${status:-0}" \
-                     '. + [{"asset_name":$n,"asset_type":$t,"asset_value":$v,"status_code":$s}]' <<<"$results")
-        done
+      echo "Migrated OK:   ${ok_csv}"
+      echo "Migrated FAIL: ${fail_csv}"
 
-        printf '%s\n' "$results" | jq . > assets.migrated.json
-
-        ok_csv=$(IFS=,; echo "${ok[*]-}")
-        fail_csv=$(IFS=,; echo "${fail[*]-}")
-        echo "migrated_ok=$ok_csv"     >> "$GITHUB_OUTPUT"
-        echo "migrated_fail=$fail_csv" >> "$GITHUB_OUTPUT"
-        echo "path=$GITHUB_WORKSPACE/assets.migrated.json" >> "$GITHUB_OUTPUT"
-        
-outputs:
-  migrated_ok:
-    description: "CSV of successfully migrated asset names"
-    value: ${{ steps.run.outputs.migrated_ok }}
-  migrated_fail:
-    description: "CSV of failed asset names"
-    value: ${{ steps.run.outputs.migrated_fail }}
-  path:
-    description: "Path to assets.migrated.json"
-    value: ${{ steps.run.outputs.path }}
+      echo "migrated_ok=${ok_csv}"     >> "$GITHUB_OUTPUT"
+      echo "migrated_fail=${fail_csv}" >> "$GITHUB_OUTPUT"
