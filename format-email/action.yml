@@ -301,129 +301,117 @@ runs:
         PROJECT_ID:   ${{ inputs.project_id }}
         ASSET_NAMES:  ${{ inputs.asset_names }}
       with:
-        script: |
-          const fs = require('fs');
-          const path = require('path');
+       script: |
+        const fs = require('fs');
+        const path = require('path');
+        const core = require('@actions/core'); // <-- add this
 
-          const TEST_PATH = 'test.html';
-          const ANALYSIS_PATH = 'analyze.html';
+        const TEST_PATH = 'test.html';
+        const ANALYSIS_PATH = 'analyze.html';
 
-          const row = (k, v) => v
-            ? `<tr><td style="padding:8px;border:1px solid #ddd;"><strong>${k}</strong></td><td style="padding:8px;border:1px solid #ddd;">${v}</td></tr>`
-            : '';
+        const row = (k, v) => v
+          ? `<tr><td style="padding:8px;border:1px solid #ddd;"><strong>${k}</strong></td><td style="padding:8px;border:1px solid #ddd;">${v}</td></tr>`
+          : '';
 
-          const parseAssetList = (s) => {
-            if (!s) return [];
-            const t = String(s).trim();
+        // parse assets (your function kept as-is) ...
+        const parseAssetList = (s) => {
+          if (!s) return [];
+          const t = String(s).trim();
+          try { const arr = JSON.parse(t); if (Array.isArray(arr)) return arr.map(String); } catch {}
+          try { const arr = JSON.parse(t.replace(/'/g, '"')); if (Array.isArray(arr)) return arr.map(String); } catch {}
+          const m = t.match(/^\[\s*([\s\S]*?)\s*\]$/);
+          if (!m) return [];
+          return m[1].split(',').map(x => x.replace(/^['"\s]+|['"\s]+$/g, '')).filter(Boolean);
+        };
 
-            try { const arr = JSON.parse(t); if (Array.isArray(arr)) return arr.map(String); } catch {}
+        const allAssetsOriginal = parseAssetList(process.env.ASSET_NAMES || '');
+        const norm = x => String(x).trim().toLowerCase();
 
+        let state = { envs: {} };
+        try {
+          const p = fs.existsSync('state.json')
+            ? 'state.json'
+            : (fs.existsSync('migration-state/state.json') ? 'migration-state/state.json' : null);
+          if (p) state = JSON.parse(fs.readFileSync(p, 'utf8'));
+        } catch {}
 
-            try { const arr = JSON.parse(t.replace(/'/g, '"')); if (Array.isArray(arr)) return arr.map(String); } catch {}
+        const assetsRows = Object.entries(state.envs || {}).map(([e, v]) => {
+          const okOriginal = Array.from(new Set([...(v?.ok || [])].map(String)));
+          const okSet = new Set(okOriginal.map(norm));
+          const notOriginal = allAssetsOriginal.filter(a => !okSet.has(norm(a)));
+          return row(`${e} — OK`,  okOriginal.join(', ')) +
+                row(`${e} — NOT`, notOriginal.join(', '));
+        }).join('');
 
-            const m = t.match(/^\[\s*([\s\S]*?)\s*\]$/);
-            if (!m) return [];
-            return m[1]
-              .split(',')                                // split by comma
-              .map(x => x.replace(/^['"\s]+|['"\s]+$/g, '')) // trim + strip quotes
-              .filter(Boolean);
-          };
+        const assetsTable = assetsRows
+          ? `<h3 style="margin:16px 0 8px 0;">Assets by Environment</h3>` +
+            `<table style="border-collapse:collapse;width:100%;margin-bottom:16px;">${assetsRows}</table>`
+          : '';
 
-          const allAssetsOriginal = parseAssetList(process.env.ASSET_NAMES || '');
+        const env = (process.env.TARGET_ENV || 'dev').toLowerCase();
+        const bodyPath = (env === 'test') ? TEST_PATH : ANALYSIS_PATH;
 
-   
-          const norm = x => String(x).trim().toLowerCase();
+        const extractBody = (html) => {
+          const m = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(html);
+          return (m ? m[1] : html);
+        };
 
-          let state = { envs: {} };
-          try {
-            const p = fs.existsSync('state.json')
-              ? 'state.json'
-              : (fs.existsSync('migration-state/state.json') ? 'migration-state/state.json' : null);
-            if (p) state = JSON.parse(fs.readFileSync(p, 'utf8'));
-          } catch { /* keep default */ }
+        try { fs.statSync(bodyPath); } catch {
+          fs.mkdirSync(path.dirname(bodyPath), { recursive: true });
+          fs.writeFileSync(bodyPath, '<!doctype html><html><body><p>No content found.</p></body></html>', 'utf8');
+        }
 
-    
-          const assetsRows = Object.entries(state.envs || {}).map(([e, v]) => {
-            const okOriginal = Array.from(new Set([...(v?.ok || [])].map(String)));
-            const okSet = new Set(okOriginal.map(norm));
+        const inner = extractBody(fs.readFileSync(bodyPath, 'utf8')).replace(/<script[\s\S]*?<\/script>/gi, '');
 
-           
-            const notOriginal = allAssetsOriginal.filter(a => !okSet.has(norm(a)));
+        const repo   = process.env.GITHUB_REPOSITORY || '';
+        const runId  = process.env.GITHUB_RUN_ID || '';
+        const runUrl = (repo && runId) ? `https://github.com/${repo}/actions/runs/${runId}` : '';
 
-            return row(`${e} — OK`,  okOriginal.join(', ')) +
-                  row(`${e} — NOT`, notOriginal.join(', '));
-          }).join('');
+        const cd = (process.env.CD_STATUS || '').toLowerCase();
+        const overall = (cd === 'success') ? 'success' : 'failure';
+        const okStatus = (overall === 'success');
+        const ICON = okStatus ? '✅' : '❌';
+        const COLOR = okStatus ? '#2e7d32' : '#c62828';
+        const WORD = okStatus ? 'Successful' : 'Failed';
 
-       
-          const assetsTable = assetsRows
-            ? `<h3 style="margin:16px 0 8px 0;">Assets by Environment</h3>` +
-              `<table style="border-collapse:collapse;width:100%;margin-bottom:16px;">${assetsRows}</table>`
-            : '';
+        const subjectPrefix = (env === 'test') ? 'UiPath Test Report'
+                              : (env === 'dev') ? 'UiPath Analysis Report'
+                              : 'UiPath Report';
+        const subject = `${subjectPrefix} - ${repo} #${process.env.GITHUB_RUN_NUMBER || ''}`;
 
+        const statusHtml =
+          `<h2 style="color:${COLOR};margin:0 0 12px 0;">${ICON} Deployment ${WORD} — ${env}</h2>` +
+          `<table style="border-collapse:collapse;width:100%;margin-bottom:16px;">` +
+            row('Repository:', repo) +
+            row('Source ref:', process.env.SOURCE_REF || '') +
+            row('Version:',    process.env.VERSION || '') +
+            row('Folder:',     process.env.FOLDER_NAME || '') +
+            row('Project ID:', process.env.PROJECT_ID || '') +
+          `</table>`; // <-- added '+'
 
-          const env = (process.env.TARGET_ENV || 'dev').toLowerCase();
-          const bodyPath = (env === 'test') ? TEST_PATH : ANALYSIS_PATH;
+        const button = runUrl
+          ? `<p style="margin-top:20px;"><a href="${runUrl}" style="background-color:#007acc;color:#ffffff;padding:10px 15px;text-decoration:none;border-radius:5px;display:inline-block;">View Workflow Details</a></p>`
+          : '';
 
-          const extractBody = (html) => {
-            const m = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(html);
-            return (m ? m[1] : html);
-          };
+        const finalHtml = [
+          '<!doctype html><html>',
+          '<body style="font-family:Arial,Helvetica,sans-serif;margin:20px;color:#0f172a;">',
+          statusHtml,
+          assetsTable,
+          inner,
+          button,
+          '</body></html>'
+        ].join('').replace(/>\s+</g, '>\r\n<');
 
-          try { fs.statSync(bodyPath); } catch {
-            fs.mkdirSync(path.dirname(bodyPath), { recursive: true });
-            fs.writeFileSync(bodyPath, '<!doctype html><html><body><p>No content found.</p></body></html>', 'utf8');
-          }
+        const outPath = 'final-email.html';
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, finalHtml, 'utf8');
 
-          const inner = extractBody(fs.readFileSync(bodyPath, 'utf8')).replace(/<script[\s\S]*?<\/script>/gi, '');
+        core.setOutput('html', outPath);
+        core.setOutput('subject', subject);
+        core.setOutput('overall', overall);
+        core.setOutput('attach_path', bodyPath);
 
-          const repo   = process.env.GITHUB_REPOSITORY || '';
-          const runId  = process.env.GITHUB_RUN_ID || '';
-          const runUrl = (repo && runId) ? `https://github.com/${repo}/actions/runs/${runId}` : '';
-
-          const cd = (process.env.CD_STATUS || '').toLowerCase();
-          const overall = (cd === 'success') ? 'success' : 'failure';
-          const okStatus = (overall === 'success');
-          const ICON = okStatus ? '✅' : '❌';
-          const COLOR = okStatus ? '#2e7d32' : '#c62828';
-          const WORD = okStatus ? 'Successful' : 'Failed';
-
-          const subjectPrefix = (env === 'test') ? 'UiPath Test Report'
-                                : (env === 'dev') ? 'UiPath Analysis Report'
-                                : 'UiPath Report';
-          const subject = `${subjectPrefix} - ${repo} #${process.env.GITHUB_RUN_NUMBER || ''}`;
-
-          const statusHtml =
-            `<h2 style="color:${COLOR};margin:0 0 12px 0;">${ICON} Deployment ${WORD} — ${env}</h2>` +
-            `<table style="border-collapse:collapse;width:100%;margin-bottom:16px;">` +
-              row('Repository:', repo) +
-              row('Source ref:', process.env.SOURCE_REF || '') +
-              row('Version:',    process.env.VERSION || '') +
-              row('Folder:',     process.env.FOLDER_NAME || '') +
-              row('Project ID:', process.env.PROJECT_ID || '') 
-            `</table>`;
-
-          const button = runUrl
-            ? `<p style="margin-top:20px;"><a href="${runUrl}" style="background-color:#007acc;color:#ffffff;padding:10px 15px;text-decoration:none;border-radius:5px;display:inline-block;">View Workflow Details</a></p>`
-            : '';
-
-          const finalHtml = [
-            '<!doctype html><html>',
-            '<body style="font-family:Arial,Helvetica,sans-serif;margin:20px;color:#0f172a;">',
-            statusHtml,
-            assetsTable,
-            inner,
-            button,
-            '</body></html>'
-          ].join('').replace(/>\s+</g, '>\r\n<');
-
-          const outPath = 'final-email.html';
-          fs.mkdirSync(path.dirname(outPath), { recursive: true });
-          fs.writeFileSync(outPath, finalHtml, 'utf8');
-
-          core.setOutput('html', outPath);
-          core.setOutput('subject', subject);
-          core.setOutput('overall', overall);
-          core.setOutput('attach_path', bodyPath);
 
 
     - name: Upload artifact
