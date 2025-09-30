@@ -7,7 +7,6 @@ inputs:
   folder_name: { required: true, description: "" }
   version: { required: true, description: "" }
   pid: { required: true, description: "" }
-  target_env: { required: true, description: "" }
   ptype: { required: true, description: "" }
 
 
