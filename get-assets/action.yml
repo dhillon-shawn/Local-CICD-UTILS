@@ -135,7 +135,7 @@ runs:
             text:    ( ($t[0].value // []) | map({key:.Name, value:.StringValue}) | from_entries ),
             integer: ( ($i[0].value // []) | map({key:.Name, value:.IntValue   }) | from_entries ),
             bool:    ( ($b[0].value // []) | map({key:.Name, value:.BoolValue  }) | from_entries )
-          }' > assets.values.simple.json
+          }' > assets.json
 
         # also export as compact JSON strings (3 outputs)
         text_json=$(jq -c '.text'    assets.json)
