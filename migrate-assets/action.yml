@@ -68,14 +68,14 @@ runs:
               --connect-timeout 10 --max-time 120 \
               --output "$response" \
               --write-out '%{http_code}' \
-              -X PATCH \
+              -X PUT \
               -H "Authorization: Bearer ${{ env.TOKEN}}" \
               -H "Content-Type: application/json" \
               -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
               --data-binary "$body" \
               "${OR_URL}/odata/Assets(${id})"
           )
-          echo "Patch response: $status"
+          echo "PUT response: $status"
           echo "::group::Response body"
           if [[ -s "$response" ]] && command -v jq >/dev/null && jq -e . "$response" >/dev/null 2>&1; then
             jq -r . "$response"
