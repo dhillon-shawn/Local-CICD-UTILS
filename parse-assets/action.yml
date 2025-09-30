@@ -1,18 +1,9 @@
 name: "parse-assets"
 description: "Parse UiPath assets (XAML + Data/Config.xlsx) and output CSV name lists"
 outputs:
-    text_names:
-        description: "CSV of Text asset names"
-        value: ${{ steps.scan.outputs.text_names }}
-    int_names:
-        description: "CSV of Integer asset names"
-        value: ${{ steps.scan.outputs.int_names }}
-    bool_names:
-        description: "CSV of Bool asset names"
-        value: ${{ steps.scan.outputs.bool_names }}
-    credential_names:
-        description: "CSV of Credential asset names"
-        value: ${{ steps.scan.outputs.credential_names }}
+    asset_filter:
+        value: ${{ steps.scan.outputs.asset_filter }}
+        description: ""
 runs:
   using: "composite"
   steps:
@@ -147,4 +138,4 @@ runs:
         print(filter_str)
 
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-            f.write(f"odata_filter={filter_str}\n")
+            f.write(f"asset_filter={filter_str}\n")
