@@ -312,39 +312,53 @@ runs:
           ? `<tr><td style="padding:8px;border:1px solid #ddd;"><strong>${k}</strong></td><td style="padding:8px;border:1px solid #ddd;">${v}</td></tr>`
           : '';
 
-        // parse assets (your function kept as-is) ...
         const parseAssetList = (s) => {
           if (!s) return [];
           const t = String(s).trim();
-          try { const arr = JSON.parse(t); if (Array.isArray(arr)) return arr.map(String); } catch {}
-          try { const arr = JSON.parse(t.replace(/'/g, '"')); if (Array.isArray(arr)) return arr.map(String); } catch {}
+          try { const a = JSON.parse(t); if (Array.isArray(a)) return a.map(String); } catch {}
+          try { const a = JSON.parse(t.replace(/'/g, '"')); if (Array.isArray(a)) return a.map(String); } catch {}
           const m = t.match(/^\[\s*([\s\S]*?)\s*\]$/);
           if (!m) return [];
           return m[1].split(',').map(x => x.replace(/^['"\s]+|['"\s]+$/g, '')).filter(Boolean);
         };
 
         const allAssetsOriginal = parseAssetList(process.env.ASSET_NAMES || '');
-        const norm = x => String(x).trim().toLowerCase();
+        const norm = s => String(s).trim().toLowerCase();
 
+        // Load migration-state if present
         let state = { envs: {} };
         try {
           const p = fs.existsSync('state.json')
             ? 'state.json'
             : (fs.existsSync('migration-state/state.json') ? 'migration-state/state.json' : null);
           if (p) state = JSON.parse(fs.readFileSync(p, 'utf8'));
-        } catch {}
+        } catch { /* ignore */ }
 
-        const assetsRows = Object.entries(state.envs || {}).map(([e, v]) => {
-          const okOriginal = Array.from(new Set([...(v?.ok || [])].map(String)));
+        // Build per-env rows; ALWAYS show both OK & NOT rows if either has items
+        const envRowsHtml = Object.entries(state.envs || {}).map(([envName, envVal]) => {
+          const okOriginal = Array.from(new Set((envVal?.ok || []).map(String).filter(Boolean)));
           const okSet = new Set(okOriginal.map(norm));
+
           const notOriginal = allAssetsOriginal.filter(a => !okSet.has(norm(a)));
-          return row(`${e} — OK`,  okOriginal.join(', ')) +
-                row(`${e} — NOT`, notOriginal.join(', '));
+
+          // If both are empty, skip this env entirely
+          if (okOriginal.length === 0 && notOriginal.length === 0) return '';
+
+          // Render two rows even if one side is empty (show '—' so it doesn't vanish)
+          const tdL = 'padding:8px;border:1px solid #ddd;';
+          const label = l => `<td style="${tdL}"><strong>${envName} — ${l}</strong></td>`;
+          const cell  = v => `<td style="${tdL}">${v || '—'}</td>`;
+
+          const okCell  = cell(okOriginal.join(', '));
+          const notCell = cell(notOriginal.join(', '));
+
+          return `<tr>${label('OK')}${okCell}</tr><tr>${label('NOT')}${notCell}</tr>`;
         }).join('');
 
-        const assetsTable = assetsRows
-          ? `<h3 style="margin:16px 0 8px 0;">Assets by Environment</h3>` +
-            `<table style="border-collapse:collapse;width:100%;margin-bottom:16px;">${assetsRows}</table>`
+        // Final assets table (only if at least one env produced rows)
+        const assetsTable = envRowsHtml
+          ? `<h3 style="margin:16px 0 8px 0;">Assets by Environment</h3>
+            <table style="border-collapse:collapse;width:100%;margin-bottom:16px;">${envRowsHtml}</table>`
           : '';
 
         const env = (process.env.TARGET_ENV || 'dev').toLowerCase();
