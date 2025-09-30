@@ -399,9 +399,7 @@ runs:
               row('Source ref:', process.env.SOURCE_REF || '') +
               row('Version:',    process.env.VERSION || '') +
               row('Folder:',     process.env.FOLDER_NAME || '') +
-              row('Project ID:', process.env.PROJECT_ID || '') +
-              row('CD Status:',  process.env.CD_STATUS || '') +
-              row('Overall:',    overall) +
+              row('Project ID:', process.env.PROJECT_ID || '') 
             `</table>`;
 
           const button = runUrl
