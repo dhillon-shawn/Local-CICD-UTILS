@@ -8,15 +8,13 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Ensure jq
-      shell: bash
-      run: |
-        sudo apt-get update -y
-        sudo apt-get install -y jq
+
 
     - name: GET values and build assets.values.json
       shell: bash
       env:
+        OR_URL:      ${{ inputs.or_url }}
+        TOKEN:       ${{ inputs.token }}
         FOLDER:      ${{ inputs.folder_name }}
         TEXT_NAMES:  ${{ inputs.text_names }}
         INT_NAMES:   ${{ inputs.int_names }}
@@ -24,36 +22,35 @@ runs:
       run: |
         set -euo pipefail
 
-        # -------- helpers (readable) --------
-        # Turn "A,B" into "Name eq 'A' or Name eq 'B'"; escape single quotes for OData
+        # ========== helpers ==========
+        trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; echo "${s%"${s##*[![:space:]]}"}"; }
+
         make_or_clause() {
-          local csv="$1"; local -a parts=(); IFS=',' read -ra arr <<<"$csv"
+          local csv="$1"; local -a parts=()
+          IFS=',' read -ra arr <<<"$csv"
           for name in "${arr[@]}"; do
-            name="${name#"${name%%[![:space:]]*}"}"; name="${name%"${name##*[![:space:]]}"}"   # trim
+            name="$(trim "$name")"
             [[ -z "$name" ]] && continue
-            name="${name//\'/\'}"     # escape single quotes for OData ('' inside '')
+            # Escape single quotes for OData (' -> '')
+            name="${name//\'/\'}"
             parts+=("Name eq '$name'")
           done
-          local IFS=' or '
-          echo "${parts[*]}"
+          local IFS=' or '; echo "${parts[*]-}"
         }
 
-        # One request per type. Writes resp_*.json + status_*.txt
-        get_type() {
-          local value_type="$1"   # Text | Integer | Bool
-          local select="$2"       # e.g. "Name,StringValue"
-          local csv_names="$3"    # CSV list
+        fetch_type() {
+          # $1=ValueType (Text|Integer|Bool)  $2=select fields  $3=CSV names
+          local value_type="$1" select_fields="$2" csv_names="$3"
           local clause; clause="$(make_or_clause "$csv_names")"
+          local tmp status curl_rc=0
+          tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
 
-          # If no names of this type, write empty success-like files for a simple downstream path
           if [[ -z "$clause" ]]; then
             echo '{"value":[]}' > "resp_${value_type}.json"
             echo "204" > "status_${value_type}.txt"
+            echo "::notice title=GET ${value_type}::no names provided"
             return
           fi
-
-          local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
-          local status curl_rc=0
 
           status=$(
             curl -L -sS --get \
@@ -63,7 +60,7 @@ runs:
               -H "Authorization: Bearer ${TOKEN}" \
               -H "X-UIPATH-FolderPath: ${FOLDER}" \
               --data-urlencode "\$filter=ValueType eq '${value_type}' and (${clause})" \
-              --data-urlencode "\$select=${select}" \
+              --data-urlencode "\$select=${select_fields}" \
               "${OR_URL}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered"
           ) || curl_rc=$?
 
@@ -74,56 +71,83 @@ runs:
           if command -v jq >/dev/null; then jq -r . "resp_${value_type}.json" || cat "resp_${value_type}.json"; else cat "resp_${value_type}.json"; fi
           echo "::endgroup::"
 
-          if [[ $curl_rc -ne 0 ]]; then echo "curl error for ${value_type} (rc=$curl_rc)"; fi
+          if [[ $curl_rc -ne 0 ]]; then
+            echo "::warning title=GET ${value_type}::curl rc=$curl_rc"
+          fi
         }
 
-        # -------- perform the three GETs --------
-        get_type "Bool"    "Name,BoolValue"   "$BOOL_NAMES"
-        get_type "Integer" "Name,IntValue"    "$INT_NAMES"
-        get_type "Text"    "Name,StringValue" "$TEXT_NAMES"
+        # ========== fetch each type ==========
+        fetch_type "Bool"    "Name,BoolValue"   "$BOOL_NAMES"
+        fetch_type "Integer" "Name,IntValue"    "$INT_NAMES"
+        fetch_type "Text"    "Name,StringValue" "$TEXT_NAMES"
 
-        # -------- build assets.values.json (no Python) --------
-        # For each requested name:
-        #   - status_code = 200 if present in response
-        #   - status_code = 404 if request returned OK (<400) but name missing
-        #   - status_code = 503 if request failed (>=400)
-        jq -n \
-          --arg bool_csv   "$BOOL_NAMES" \
-          --arg int_csv    "$INT_NAMES" \
-          --arg text_csv   "$TEXT_NAMES" \
-          --argjson bool_r "$(cat resp_Bool.json)" \
-          --argjson int_r  "$(cat resp_Integer.json)" \
-          --argjson text_r "$(cat resp_Text.json)" \
-          --arg bool_s "$(cat status_Bool.txt)" \
-          --arg int_s  "$(cat status_Integer.txt)" \
-          --arg text_s "$(cat status_Text.txt)" '
-          def present_map(resp; field):
-            (resp.value // []) | map({key: .Name, value: .[field]}) | from_entries;
-          def names(csv): csv | split(",") | map(select(length>0));
+        # ========== build output (bash loops; tiny jq for lookups/appends) ==========
+        # Start with empty array file
+        echo '[]' > assets.values.json
 
-          def bucket(csv; resp; field; kind; status):
-            (names(csv)) as $names
-            | (present_map(resp; field)) as $map
-            | ($names | map(
-                if . as $n | ($map[$n] != null)
-                  then {asset_name: $n, asset_type: kind, asset_value: $map[$n], status_code: 200}
-                  else {asset_name: $n, asset_type: kind, asset_value: null,
-                        status_code: ( ( (status|tonumber) < 400 ) and ( (status|tonumber) > 0 ) ) ? 404 : 503}
-                end
-              ));
+        append_record() {
+          # $1=name  $2=type  $3=value_json  $4=status_code
+          local name="$1" type="$2" value_json="$3" status="$4"
+          # Use jq to append one object so JSON stays valid
+          jq --arg n "$name" --arg t "$type" --argjson v "$value_json" --argjson s "$status" \
+             '. + [{"asset_name":$n,"asset_type":$t,"asset_value":$v,"status_code":$s}]' \
+             assets.values.json > assets.values.json.tmp
+          mv assets.values.json.tmp assets.values.json
+        }
 
-          (bucket($bool_csv;  $bool_r;  "BoolValue";    "Bool";    $bool_s)) +
-          (bucket($int_csv;   $int_r;   "IntValue";     "Integer"; $int_s)) +
-          (bucket($text_csv;  $text_r;  "StringValue";  "Text";    $text_s))
-          ' > assets.values.json
+        # Lookup helpers: extract value from response for a given name
+        # If found -> echoes the JSON value; returns 0
+        # If missing -> echoes 'null'; returns 1 (so we can tell 404 vs 503 using request status)
+        lookup_value() {
+          # $1=resp.json  $2=name  $3=field
+          local resp="$1" name="$2" field="$3"
+          if jq -e --arg n "$name" ".value[] | select(.Name==\$n) | has(\"$field\")" "$resp" >/dev/null; then
+            jq -r --arg n "$name" ".value[] | select(.Name==\$n) | .[\"$field\"]" "$resp"
+            return 0
+          else
+            echo "null"
+            return 1
+          fi
+        }
 
-        echo "assets.values.json written:"
-        jq -r '.[0:5]' assets.values.json || cat assets.values.json
+        process_bucket() {
+          # $1=CSV names  $2=Type  $3=resp.json  $4=status.txt  $5=value field
+          local csv="$1" type="$2" resp="$3" status_file="$4" field="$5"
+          local http_status ok
+          http_status="$(cat "$status_file" | tr -d '\n' | tr -d '\r' || echo 0)"
+          # Consider <400 as OK; 0 means we skipped the request (treated OK so we mark 404 for missing)
+          if [[ "$http_status" =~ ^[0-9]+$ ]] && [[ "$http_status" -lt 400 ]]; then ok=1; else ok=0; fi
+
+          IFS=',' read -ra arr <<<"$csv"
+          for name in "${arr[@]}"; do
+            name="$(trim "$name")"
+            [[ -z "$name" ]] && continue
+
+            if value_json="$(lookup_value "$resp" "$name" "$field")"; then
+              append_record "$name" "$type" "$value_json" 200
+            else
+              # Missing in response: 404 if request OK, else 503
+              if [[ "$ok" -eq 1 ]]; then
+                append_record "$name" "$type" null 404
+              else
+                append_record "$name" "$type" null 503
+              fi
+            fi
+          done
+        }
+
+        process_bucket "$BOOL_NAMES"  "Bool"    "resp_Bool.json"    "status_Bool.txt"    "BoolValue"
+        process_bucket "$INT_NAMES"   "Integer" "resp_Integer.json" "status_Integer.txt" "IntValue"
+        process_bucket "$TEXT_NAMES"  "Text"    "resp_Text.json"    "status_Text.txt"    "StringValue"
+
+        echo "assets.values.json:"
+        jq -r '.[0:10]' assets.values.json || cat assets.values.json
 
     - name: Output path
       id: out
       shell: bash
       run: echo "path=$GITHUB_WORKSPACE/assets.values.json" >> "$GITHUB_OUTPUT"
+
 
 outputs:
   path:
