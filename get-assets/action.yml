@@ -1,0 +1,131 @@
+name: "get-assets"
+description: "Batch GET UiPath asset values (Text/Integer/Bool) and write assets.values.json"
+inputs:
+  folder_name:    { description: "X-UIPATH-FolderPath value (e.g. 'Dev')", required: true }
+  text_names:     { description: "CSV of Text asset names", required: false, default: "" }
+  int_names:      { description: "CSV of Integer asset names", required: false, default: "" }
+  bool_names:     { description: "CSV of Bool asset names", required: false, default: "" }
+runs:
+  using: "composite"
+  steps:
+    - name: Ensure jq
+      shell: bash
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y jq
+
+    - name: GET values and build assets.values.json
+      shell: bash
+      env:
+        FOLDER:      ${{ inputs.folder_name }}
+        TEXT_NAMES:  ${{ inputs.text_names }}
+        INT_NAMES:   ${{ inputs.int_names }}
+        BOOL_NAMES:  ${{ inputs.bool_names }}
+      run: |
+        set -euo pipefail
+
+        # -------- helpers (readable) --------
+        # Turn "A,B" into "Name eq 'A' or Name eq 'B'"; escape single quotes for OData
+        make_or_clause() {
+          local csv="$1"; local -a parts=(); IFS=',' read -ra arr <<<"$csv"
+          for name in "${arr[@]}"; do
+            name="${name#"${name%%[![:space:]]*}"}"; name="${name%"${name##*[![:space:]]}"}"   # trim
+            [[ -z "$name" ]] && continue
+            name="${name//\'/\'}"     # escape single quotes for OData ('' inside '')
+            parts+=("Name eq '$name'")
+          done
+          local IFS=' or '
+          echo "${parts[*]}"
+        }
+
+        # One request per type. Writes resp_*.json + status_*.txt
+        get_type() {
+          local value_type="$1"   # Text | Integer | Bool
+          local select="$2"       # e.g. "Name,StringValue"
+          local csv_names="$3"    # CSV list
+          local clause; clause="$(make_or_clause "$csv_names")"
+
+          # If no names of this type, write empty success-like files for a simple downstream path
+          if [[ -z "$clause" ]]; then
+            echo '{"value":[]}' > "resp_${value_type}.json"
+            echo "204" > "status_${value_type}.txt"
+            return
+          fi
+
+          local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+          local status curl_rc=0
+
+          status=$(
+            curl -L -sS --get \
+              --connect-timeout 10 --max-time 120 \
+              --output "$tmp" \
+              --write-out '%{http_code}' \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "X-UIPATH-FolderPath: ${FOLDER}" \
+              --data-urlencode "\$filter=ValueType eq '${value_type}' and (${clause})" \
+              --data-urlencode "\$select=${select}" \
+              "${OR_URL}/odata/Assets/UiPath.Server.Configuration.OData.GetFiltered"
+          ) || curl_rc=$?
+
+          cat "$tmp" > "resp_${value_type}.json"
+          echo "${status}" > "status_${value_type}.txt"
+
+          echo "::group::GET ${value_type} (status=${status})"
+          if command -v jq >/dev/null; then jq -r . "resp_${value_type}.json" || cat "resp_${value_type}.json"; else cat "resp_${value_type}.json"; fi
+          echo "::endgroup::"
+
+          if [[ $curl_rc -ne 0 ]]; then echo "curl error for ${value_type} (rc=$curl_rc)"; fi
+        }
+
+        # -------- perform the three GETs --------
+        get_type "Bool"    "Name,BoolValue"   "$BOOL_NAMES"
+        get_type "Integer" "Name,IntValue"    "$INT_NAMES"
+        get_type "Text"    "Name,StringValue" "$TEXT_NAMES"
+
+        # -------- build assets.values.json (no Python) --------
+        # For each requested name:
+        #   - status_code = 200 if present in response
+        #   - status_code = 404 if request returned OK (<400) but name missing
+        #   - status_code = 503 if request failed (>=400)
+        jq -n \
+          --arg bool_csv   "$BOOL_NAMES" \
+          --arg int_csv    "$INT_NAMES" \
+          --arg text_csv   "$TEXT_NAMES" \
+          --argjson bool_r "$(cat resp_Bool.json)" \
+          --argjson int_r  "$(cat resp_Integer.json)" \
+          --argjson text_r "$(cat resp_Text.json)" \
+          --arg bool_s "$(cat status_Bool.txt)" \
+          --arg int_s  "$(cat status_Integer.txt)" \
+          --arg text_s "$(cat status_Text.txt)" '
+          def present_map(resp; field):
+            (resp.value // []) | map({key: .Name, value: .[field]}) | from_entries;
+          def names(csv): csv | split(",") | map(select(length>0));
+
+          def bucket(csv; resp; field; kind; status):
+            (names(csv)) as $names
+            | (present_map(resp; field)) as $map
+            | ($names | map(
+                if . as $n | ($map[$n] != null)
+                  then {asset_name: $n, asset_type: kind, asset_value: $map[$n], status_code: 200}
+                  else {asset_name: $n, asset_type: kind, asset_value: null,
+                        status_code: ( ( (status|tonumber) < 400 ) and ( (status|tonumber) > 0 ) ) ? 404 : 503}
+                end
+              ));
+
+          (bucket($bool_csv;  $bool_r;  "BoolValue";    "Bool";    $bool_s)) +
+          (bucket($int_csv;   $int_r;   "IntValue";     "Integer"; $int_s)) +
+          (bucket($text_csv;  $text_r;  "StringValue";  "Text";    $text_s))
+          ' > assets.values.json
+
+        echo "assets.values.json written:"
+        jq -r '.[0:5]' assets.values.json || cat assets.values.json
+
+    - name: Output path
+      id: out
+      shell: bash
+      run: echo "path=$GITHUB_WORKSPACE/assets.values.json" >> "$GITHUB_OUTPUT"
+
+outputs:
+  path:
+    description: "Path to assets.values.json"
+    value: ${{ steps.out.outputs.path }}
