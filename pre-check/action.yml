@@ -45,8 +45,9 @@ runs:
             const repoInfo = await github.rest.repos.get({ owner, repo });
             defaultBranch = repoInfo.data.default_branch || 'main';
           }
+          const isHotfixBranch = /^hotfix\//.test(branch);
 
-          if (branch === defaultBranch) {
+          if (branch === defaultBranch || isHotfixBranch) {
 
             out.target_env = '';
             out.sha        = '';
