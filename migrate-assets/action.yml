@@ -38,6 +38,14 @@ runs:
     shell: bash
     run: |
       set -euo pipefail
+      
+      if [[ ! -f state.json ]]; then
+        echo 'Initializing state.json (first matrix run)…'
+        printf '%s\n' '{ "envs": {} }' > state.json
+      fi
+
+
+
       test -f assets.json
 
       ok=()
@@ -61,6 +69,7 @@ runs:
         echo " asset id: $id"
 
         if [[ -n "$id" ]]; then
+          body_with_id="$(jq -c --arg id "$id" '. + {Id: ($id|tonumber)}' <<<"$body")"
           response="$(mktemp)"
           trap 'rm -f "$response"' EXIT
           status=$(
@@ -72,7 +81,7 @@ runs:
               -H "Authorization: Bearer ${{ env.TOKEN}}" \
               -H "Content-Type: application/json" \
               -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
-              --data-binary "$body" \
+              --data-binary  "$body_with_id" \
               "${OR_URL}/odata/Assets(${id})"
           )
           echo "PUT response: $status"
