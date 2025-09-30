@@ -7,6 +7,13 @@ inputs:
   asset_names:
     description: "CSV of all asset names from parse step"
     required: true
+outputs:
+  migrated:
+    value: ${{ steps.migrate.outputs.migrated }}
+    description: ""
+  not_migrated:
+      value: ${{ steps.migrate.outputs.not_migrated }}
+      description: ""
 runs:
   using: "composite"
   steps:
@@ -16,7 +23,15 @@ runs:
           name: assets
     continue-on-error: true
 
-  - name: Migrate assets (POST/PATCH from list)
+  - uses: actions/download-artifact@v4
+    with:
+      name: migration-state
+    continue-on-error: true
+
+
+
+  - name: Migrate assets
+    id: migrate
     shell: bash
     run: |
       set -euo pipefail
@@ -99,28 +114,21 @@ runs:
         fi
       done
 
-      declare -A okmap=()
-      for n in "${ok[@]:-}"; do okmap["$n"]=1; done
+      ok_json=$(printf '%s\n' "${ok[@]:-}"   | jq -R . | jq -s .)
+      fail_json=$(printf '%s\n' "${fail[@]:-}" | jq -R . | jq -s .)
 
-      not_uploaded=()
-      IFS=',' read -ra ALL_ARR <<<"${{inputs.asset_names}}"
-      for n in "${ALL_ARR[@]}"; do
-        # trim spaces
-        n="${n#"${n%%[![:space:]]*}"}"; n="${n%"${n##*[![:space:]]}"}"
-        [[ -z "$n" ]] && continue
-        if [[ -z "${okmap[$n]+x}" ]]; then
-          not_uploaded+=("$n")
-        fi
-      done
+          # Merge into state.json under this env; dedupe
+      jq --arg e "$ENV" --argjson newok "$ok_json" --argjson newfail "$fail_json" '
+        .envs[$e].ok     = ((.envs[$e].ok     // []) + $newok  | unique) |
+        .envs[$e].failed = ((.envs[$e].failed // []) + $newfail| unique)
+      ' state.json > state.new.json
 
-      ok_csv=$(IFS=,; echo "${ok[*]-}")
-      fail_csv=$(IFS=,; echo "${fail[*]-}")
-      not_csv=$(IFS=,; echo "${not_uploaded[*]-}")
+      mv state.new.json state.json
 
-      echo "Migrated OK:         $ok_csv"
-      echo "Attempted but FAILED: $fail_csv"
-      echo "NOT UPLOADED (ALL-OK): $not_csv"
+  - name: Upload updated state
+    uses: actions/upload-artifact@v4
+    with:
+        name: migration-state
+        path: state.json
+        overwrite: true
 
-      echo "migrated_ok=$ok_csv"        >> "$GITHUB_OUTPUT"
-      echo "migrated_fail=$fail_csv"    >> "$GITHUB_OUTPUT"
-      echo "not_uploaded=$not_csv"      >> "$GITHUB_OUTPUT"

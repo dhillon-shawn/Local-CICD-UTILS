@@ -29,6 +29,10 @@ outputs:
         description: ""
         value:    ${{ steps.deployment_matrix.outputs.DEPLOYMENT_MATRIX }}
 
+      migration_matrix:
+        description: ""
+        value:    ${{ steps.migration_matrix.outputs.MIGRATION_MATRIX }}
+
       email:
         description: ""
         value:        ${{ steps.author.outputs.EMAIL }}
@@ -189,6 +193,16 @@ runs:
             *) echo "Unknown target_env: ${{ inputs.target_env }}" >&2; exit 1 ;;
           esac
           echo "DEPLOYMENT_MATRIX={\"env\":$envs}" >> "$GITHUB_OUTPUT"
+          
+      - name: create migration matrix
+        shell: bash
+        id: migration_matrix
+        run: |
+          case "${{ inputs.target_env }}" in
+            test)    envs='["test"]' ;;
+            prod-bypass) envs='["test","prod"]' ;;
+          esac
+          echo "MIGRATION_MATRIX={\"env\":$envs}" >> "$GITHUB_OUTPUT"
 
       - name: Collect
         if: inputs.everything != 'false'
