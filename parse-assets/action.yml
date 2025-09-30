@@ -4,6 +4,9 @@ outputs:
     asset_filter:
         value: ${{ steps.scan.outputs.asset_filter }}
         description: ""
+    asset_names:
+        value: ${{ steps.scan.outputs.asset_names }}
+        description: ""
 runs:
   using: "composite"
   steps:
@@ -127,6 +130,9 @@ runs:
         all_names = set()
         all_names |= read_excel_names()
         all_names |= read_xaml_names()
+        
+        all_list = sorted(all_names, key=str.casefold)
+        csv = ",".join(all_list)
 
         parts = []
         for n in sorted(all_names, key=str.casefold):
@@ -139,3 +145,4 @@ runs:
 
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
             f.write(f"asset_filter={filter_str}\n")
+            f.write(f"asset_names={csv}\n")

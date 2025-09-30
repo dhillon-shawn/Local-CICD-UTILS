@@ -1,8 +1,12 @@
 name: "migrate-assets"
 description: "POST/PATCH UiPath assets from assets.values.json; outputs migrated_ok and migrated_fail CSVs"
 inputs:
-  folder_name:    { description: "X-UIPATH-FolderPath value", required: true }
-
+  folder_name:
+    description: "X-UIPATH-FolderPath value"
+    required: true
+  asset_names:
+    description: "CSV of all asset names from parse step"
+    required: true
 runs:
   using: "composite"
   steps:
@@ -31,7 +35,7 @@ runs:
         id=$(
           curl -sS -L \
             -H "Authorization: Bearer ${{ env.TOKEN}}" \
-            -H "X-UIPATH-FolderPath: ${{ inputs.folder }}" \
+            -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
             --get --data-urlencode "\$filter=Name eq '$name'" \
             "${OR_URL}/odata/Assets" \
           | jq -r '.value[0].Id // empty'
@@ -49,7 +53,7 @@ runs:
               -X PATCH \
               -H "Authorization: Bearer ${{ env.TOKEN}}" \
               -H "Content-Type: application/json" \
-              -H "X-UIPATH-FolderPath: ${{ inputs.folder }}" \
+              -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
               --data-binary "$body" \
               "${OR_URL}/odata/Assets(${id})"
           )
@@ -72,7 +76,7 @@ runs:
               -X POST \
               -H "Authorization: Bearer ${{ env.TOKEN }}" \
               -H "Content-Type: application/json" \
-              -H "X-UIPATH-FolderPath: ${{ inputs.folder }}" \
+              -H "X-UIPATH-FolderPath: ${{ inputs.folder_name }}" \
               --data-binary "$body" \
               "${OR_URL}/odata/Assets"
           )
@@ -95,11 +99,28 @@ runs:
         fi
       done
 
+      declare -A okmap=()
+      for n in "${ok[@]:-}"; do okmap["$n"]=1; done
+
+      not_uploaded=()
+      IFS=',' read -ra ALL_ARR <<<"${{inputs.asset_names}}"
+      for n in "${ALL_ARR[@]}"; do
+        # trim spaces
+        n="${n#"${n%%[![:space:]]*}"}"; n="${n%"${n##*[![:space:]]}"}"
+        [[ -z "$n" ]] && continue
+        if [[ -z "${okmap[$n]+x}" ]]; then
+          not_uploaded+=("$n")
+        fi
+      done
+
       ok_csv=$(IFS=,; echo "${ok[*]-}")
       fail_csv=$(IFS=,; echo "${fail[*]-}")
+      not_csv=$(IFS=,; echo "${not_uploaded[*]-}")
 
-      echo "Migrated OK:   ${ok_csv}"
-      echo "Migrated FAIL: ${fail_csv}"
+      echo "Migrated OK:         $ok_csv"
+      echo "Attempted but FAILED: $fail_csv"
+      echo "NOT UPLOADED (ALL-OK): $not_csv"
 
-      echo "migrated_ok=${ok_csv}"     >> "$GITHUB_OUTPUT"
-      echo "migrated_fail=${fail_csv}" >> "$GITHUB_OUTPUT"
+      echo "migrated_ok=$ok_csv"        >> "$GITHUB_OUTPUT"
+      echo "migrated_fail=$fail_csv"    >> "$GITHUB_OUTPUT"
+      echo "not_uploaded=$not_csv"      >> "$GITHUB_OUTPUT"
