@@ -304,7 +304,6 @@ runs:
        script: |
         const fs = require('fs');
         const path = require('path');
-        const core = require('@actions/core'); // <-- add this
 
         const TEST_PATH = 'test.html';
         const ANALYSIS_PATH = 'analyze.html';
