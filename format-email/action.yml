@@ -308,16 +308,26 @@ runs:
           const TEST_PATH = 'test.html';
           const ANALYSIS_PATH = 'analyze.html';
 
-          // helper must be declared BEFORE it's used
           const row = (k, v) => v
             ? `<tr><td style="padding:8px;border:1px solid #ddd;"><strong>${k}</strong></td><td style="padding:8px;border:1px solid #ddd;">${v}</td></tr>`
             : '';
 
-          const allAssets = (() => {
+          const allAssetsRaw = (() => {
             const s = (process.env.ASSET_NAMES || '').trim();
             if (!s) return [];
             try { return JSON.parse(s.replace(/'/g, '"')); } catch { return []; }
           })();
+
+          const norm = (x) => String(x || '')
+            .replace(/^\s+|\s+$/g, '')           // trim
+            .replace(/^"(.*)"$|^'(.*)'$/, '$1$2') // strip wrapping quotes
+            .toLowerCase();                       // <-- drop if you want case-sensitive
+
+          const allAssets = allAssetsRaw
+            .map(a => String(a))
+            .filter(Boolean);
+
+          const allNormSet = new Set(allAssets.map(norm));
 
           let state = { envs: {} };
           try {
@@ -325,14 +335,18 @@ runs:
               ? 'state.json'
               : (fs.existsSync('migration-state/state.json') ? 'migration-state/state.json' : null);
             if (p) state = JSON.parse(fs.readFileSync(p, 'utf8'));
-          } catch { /* ignore, keep default */ }
+          } catch { /* ignore */ }
 
           const assetsRows = Object.entries(state.envs || {}).map(([e, v]) => {
-            const ok = Array.from(new Set([...(v?.ok || [])]));
-            const okSet = new Set(ok);
-            const not = allAssets.filter(a => !okSet.has(a));
-            return row(`${e} — OK`,  ok.join(', ')) +
-                  row(`${e} — NOT`, not.join(', '));
+            const okOriginal = Array.from(new Set([...(v?.ok || [])])).map(String);
+            const okNormSet  = new Set(okOriginal.map(norm));
+
+            const notOriginal = allAssets.filter(a => !okNormSet.has(norm(a)));
+
+            return (
+              row(`${e} — OK`,  okOriginal.join(', ')) +
+              row(`${e} — NOT`, notOriginal.join(', '))
+            );
           }).join('');
 
           const assetsTable = assetsRows
