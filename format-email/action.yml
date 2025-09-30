@@ -308,6 +308,36 @@ runs:
           const TEST_PATH = 'test.html';
           const ANALYSIS_PATH = 'analyze.html';
 
+          const allAssets = (() => {
+            const s = (process.env.ASSET_NAMES || '').trim();
+            if (!s) return [];
+            try { return JSON.parse(s.replace(/'/g, '"')); } catch { return []; }
+          })();
+
+          let state = { envs: {} };
+          try {
+            const p = fs.existsSync('state.json')
+              ? 'state.json'
+              : (fs.existsSync('migration-state/state.json') ? 'migration-state/state.json' : null);
+            if (p) state = JSON.parse(fs.readFileSync(p, 'utf8'));
+          } catch { /* ignore, keep default */ }
+
+          const assetsRows = Object.entries(state.envs || {}).map(([e, v]) => {
+            const ok = Array.from(new Set([...(v?.ok || [])]));
+            const okSet = new Set(ok);
+            const not = allAssets.filter(a => !okSet.has(a));
+            return row(`${e} — OK`,  ok.join(', ')) +
+                  row(`${e} — NOT`, not.join(', '));
+          }).join('');
+
+  
+          const assetsTable = assetsRows
+            ? `<h3 style="margin:16px 0 8px 0;">Assets by Environment</h3>` +
+              `<table style="border-collapse:collapse;width:100%;margin-bottom:16px;">${assetsRows}</table>`
+            : '';
+
+
+
           const env = (process.env.TARGET_ENV || 'dev').toLowerCase();
           const bodyPath = (env === 'test') ? TEST_PATH : ANALYSIS_PATH;
 
@@ -362,6 +392,7 @@ runs:
             '<!doctype html><html>',
             '<body style="font-family:Arial,Helvetica,sans-serif;margin:20px;color:#0f172a;">',
             statusHtml,
+            assetsTable, 
             inner,
             button,
             '</body></html>'
