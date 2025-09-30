@@ -133,7 +133,7 @@ runs:
         
         all_list = sorted(all_names, key=str.casefold)
         csv = ",".join(all_list)
-
+        print(all_list)
         parts = []
         for n in sorted(all_names, key=str.casefold):
             esc = n.replace("'", "''")   # OData escaping for single quotes

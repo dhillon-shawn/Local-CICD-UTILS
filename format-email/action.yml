@@ -40,8 +40,8 @@ inputs:
     description: "Project identifier."
     required: false
     default: ""
-  migrate:
-    description: "Migration flag text."
+  asset_names:
+    description: ""
     required: false
     default: ""
 
@@ -62,6 +62,13 @@ runs:
       with:
           name: results
           path: ./results
+      continue-on-error: true
+
+    - name: Download migration-state
+      uses: actions/download-artifact@v4
+      with:
+        name: migration-state
+        path: .
       continue-on-error: true
 
     - name: Ensure Node available
@@ -280,6 +287,8 @@ runs:
 
 
 
+
+
     - name: Compose final email
       id: compose
       uses: actions/github-script@v7
@@ -290,7 +299,7 @@ runs:
         VERSION:      ${{ inputs.version }}
         FOLDER_NAME:  ${{ inputs.folder_name }}
         PROJECT_ID:   ${{ inputs.project_id }}
-        MIGRATE:      ${{ inputs.migrate }}
+        ASSET_NAMES: ${{ inputs.asset_names }}
       with:
         script: |
           const fs = require('fs');
@@ -307,7 +316,7 @@ runs:
             return (m ? m[1] : html);
           };
 
-          // If the chosen body isn't there, make a tiny placeholder — minimal logic
+
           try { fs.statSync(bodyPath); } catch {
             fs.mkdirSync(path.dirname(bodyPath), { recursive: true });
             fs.writeFileSync(bodyPath, '<!doctype html><html><body><p>No content found.</p></body></html>', 'utf8');
@@ -337,12 +346,10 @@ runs:
             `<h2 style="color:${COLOR};margin:0 0 12px 0;">${ICON} Deployment ${WORD} — ${env}</h2>` +
             `<table style="border-collapse:collapse;width:100%;margin-bottom:16px;">` +
               row('Repository:', repo) +
-              row('Run:', runUrl ? `<a href="${runUrl}" target="_blank" style="color:#1d4ed8;text-decoration:none;">${runUrl}</a>` : '') +
               row('Source ref:', process.env.SOURCE_REF || '') +
               row('Version:',    process.env.VERSION || '') +
               row('Folder:',     process.env.FOLDER_NAME || '') +
               row('Project ID:', process.env.PROJECT_ID || '') +
-              row('Migrate:',    process.env.MIGRATE || '') +
               row('CD Status:',  process.env.CD_STATUS || '') +
               row('Overall:',    overall) +
             `</table>`;
